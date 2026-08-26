@@ -1,0 +1,4 @@
+.env
+.env.*
+!.env.example
+node_modulesgrep -R "TELEGRAM_BOT_TOKEN" src package.json tsconfig.json
