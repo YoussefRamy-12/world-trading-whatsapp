@@ -1,8 +1,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { supabase } from "./supabase";
-import "./telegram";
+import { supabase } from "./supabase.js";
+import "./telegram.js";
 import {
   createPlayer,
   getPlayer,
@@ -17,7 +17,7 @@ import {
   getDailyLeaderboard,
   adminAdjustBalance,
   adminUpdateCountry,
-} from "./game";
+} from "./game.js";
 
 dotenv.config();
 
