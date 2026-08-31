@@ -7,6 +7,7 @@ import {
   createCountryOffer,
   acceptCountryOffer,
   cancelCountryOffer,
+  upgradeCountry,
 } from "./game.js";
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -1024,6 +1025,329 @@ async function startTelegramBot() {
 
           const callbackTelegramUserId =
             callbackQuery.from.id;
+
+          if (
+            callbackData?.startsWith(
+              "upgrade_country:"
+            )
+          ) {
+            const countryId =
+              callbackData.substring(
+                "upgrade_country:".length
+              );
+
+            try {
+              const { data: country, error } =
+                await supabase
+                  .from("countries")
+                  .select(
+                    "id,name,current_price,hourly_income,upgrade_level,owner_id"
+                  )
+                  .eq("id", countryId)
+                  .single();
+
+              if (error || !country) {
+                throw new Error(
+                  "COUNTRY_NOT_FOUND"
+                );
+              }
+
+              const { data: player } =
+                await supabase
+                  .from("users")
+                  .select("id,balance,reserved_balance")
+                  .eq(
+                    "telegram_user_id",
+                    callbackTelegramUserId
+                  )
+                  .maybeSingle();
+
+              if (!player) {
+                throw new Error(
+                  "TELEGRAM_ACCOUNT_NOT_LINKED"
+                );
+              }
+
+              if (country.owner_id !== player.id) {
+                await answerCallbackQuery(
+                  callbackQuery.id,
+                  "❌ You don't own this country."
+                );
+
+                continue;
+              }
+
+              const currentLevel =
+                Number(country.upgrade_level ?? 1);
+
+              if (currentLevel >= 5) {
+                await answerCallbackQuery(
+                  callbackQuery.id,
+                  "🏆 This country is already max level."
+                );
+
+                continue;
+              }
+
+              const nextLevel =
+                currentLevel + 1;
+
+              const { data: building, error: buildingError } =
+                await supabase
+                  .from("building_levels")
+                  .select(
+                    "level,building_name,upgrade_cost,value_increase,income_increase"
+                  )
+                  .eq("level", nextLevel)
+                  .single();
+
+              if (buildingError || !building) {
+                throw new Error(
+                  "BUILDING_CONFIGURATION_NOT_FOUND"
+                );
+              }
+
+              const available =
+                Number(player.balance ?? 0) -
+                Number(player.reserved_balance ?? 0);
+
+              const cost =
+                Number(building.upgrade_cost);
+
+              if (available < cost) {
+                await answerCallbackQuery(
+                  callbackQuery.id,
+                  "❌ Not enough available balance."
+                );
+
+                if (callbackChatId !== undefined) {
+                  await sendMessage(
+                    callbackChatId,
+                    `❌ You don't have enough available balance.\n\n` +
+                    `💳 Available: $${available.toFixed(2)}\n` +
+                    `💵 Upgrade cost: $${cost.toFixed(2)}\n\n` +
+                    `You need $${(
+                      cost - available
+                    ).toFixed(2)} more.`,
+                    mainMenu()
+                  );
+                }
+
+                continue;
+              }
+
+              await answerCallbackQuery(
+                callbackQuery.id
+              );
+
+              if (callbackChatId !== undefined) {
+                await telegramRequest(
+                  "sendMessage",
+                  {
+                    chat_id: callbackChatId,
+                    text:
+                      `🔨 UPGRADE ${country.name}\n\n` +
+                      `📈 Current Level: ${currentLevel}\n` +
+                      `📈 New Level: ${nextLevel}\n\n` +
+                      `🏗️ Building: ${building.building_name}\n` +
+                      `💵 Cost: $${cost.toFixed(2)}\n` +
+                      `📊 Country Value: +$${Number(
+                        building.value_increase
+                      ).toFixed(2)}\n` +
+                      `💰 Hourly Income: +$${Number(
+                        building.income_increase
+                      ).toFixed(2)}/hour\n\n` +
+                      `Are you sure you want to upgrade?`,
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          {
+                            text: "✅ Confirm Upgrade",
+                            callback_data:
+                              `confirm_upgrade:${country.id}`,
+                          },
+                          {
+                            text: "❌ Cancel",
+                            callback_data:
+                              "cancel_upgrade",
+                          },
+                        ],
+                      ],
+                    },
+                  }
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Upgrade confirmation error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Unable to prepare upgrade."
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData?.startsWith(
+              "confirm_upgrade:"
+            )
+          ) {
+            const countryId =
+              callbackData.substring(
+                "confirm_upgrade:".length
+              );
+
+            try {
+              const { data: player, error } =
+                await supabase
+                  .from("users")
+                  .select("id")
+                  .eq(
+                    "telegram_user_id",
+                    callbackTelegramUserId
+                  )
+                  .maybeSingle();
+
+              if (error || !player) {
+                throw new Error(
+                  "TELEGRAM_ACCOUNT_NOT_LINKED"
+                );
+              }
+
+              const result =
+                await upgradeCountry(
+                  player.id,
+                  countryId
+                );
+
+              console.log(
+                "Country upgraded:",
+                result
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Upgrade successful!"
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                const upgradedCountry =
+                  await supabase
+                    .from("countries")
+                    .select(
+                      "name,current_price,hourly_income,upgrade_level"
+                    )
+                    .eq("id", countryId)
+                    .maybeSingle();
+
+                const country =
+                  upgradedCountry.data;
+
+                await sendMessage(
+                  callbackChatId,
+                  `🎉 Country upgraded successfully!\n\n` +
+                  `🌍 ${country?.name ?? "Country"}\n` +
+                  `📈 New Level: ${Number(
+                    country?.upgrade_level ?? 0
+                  )}\n` +
+                  `💵 New Value: $${Number(
+                    country?.current_price ?? 0
+                  ).toFixed(2)}\n` +
+                  `💰 New Income: $${Number(
+                    country?.hourly_income ?? 0
+                  ).toFixed(2)}/hour\n\n` +
+                  `🏗️ Your country has been upgraded successfully.`,
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Country upgrade error:",
+                error
+              );
+
+              let message =
+                "❌ I couldn't upgrade this country.";
+
+              const errorMessage =
+                error instanceof Error
+                  ? error.message
+                  : String(error);
+
+              if (
+                errorMessage.includes(
+                  "INSUFFICIENT_AVAILABLE_BALANCE"
+                )
+              ) {
+                message =
+                  "❌ You don't have enough available balance for this upgrade.";
+              } else if (
+                errorMessage.includes(
+                  "COUNTRY_NOT_FOUND"
+                )
+              ) {
+                message =
+                  "❌ This country could not be found.";
+              } else if (
+                errorMessage.includes(
+                  "NOT_COUNTRY_OWNER"
+                )
+              ) {
+                message =
+                  "❌ You don't own this country.";
+              } else if (
+                errorMessage.includes(
+                  "MAX_LEVEL"
+                )
+              ) {
+                message =
+                  "🏆 This country is already at the maximum level.";
+              }
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Upgrade failed."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  message,
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData === "cancel_upgrade"
+          ) {
+            await answerCallbackQuery(
+              callbackQuery.id,
+              "Upgrade cancelled."
+            );
+
+            if (callbackChatId !== undefined) {
+              await sendMessage(
+                callbackChatId,
+                "❌ Upgrade cancelled.",
+                mainMenu()
+              );
+            }
+
+            continue;
+          }
 
           if (
             callbackData?.startsWith(
@@ -2483,6 +2807,128 @@ async function startTelegramBot() {
 
             continue;
           }
+        }
+
+        if (text === "🔨 Upgrade Country") {
+          try {
+            const result = await getPlayerCountries(
+              telegramUserId
+            );
+
+            if (!result) {
+              await sendMessage(
+                chatId,
+                "❌ Your Telegram account is not linked to a game account.",
+                mainMenu()
+              );
+
+              continue;
+            }
+
+            const { countries } = result;
+
+            if (countries.length === 0) {
+              await sendMessage(
+                chatId,
+                "🔨 UPGRADE COUNTRY\n\n" +
+                "You don't own any countries yet.\n\n" +
+                "Buy a country first from 🏪 Market.",
+                mainMenu()
+              );
+
+              continue;
+            }
+
+            let message =
+              "🔨 UPGRADE COUNTRY\n\n" +
+              "Choose a country to upgrade:\n\n";
+
+            const buttons: unknown[][] = [];
+
+            for (const country of countries) {
+              const level = Number(
+                country.upgrade_level ?? 1
+              );
+
+              if (level >= 5) {
+                message +=
+                  `🌍 ${country.name}\n` +
+                  `📈 Level: ${level} — MAX LEVEL\n\n`;
+
+                continue;
+              }
+
+              const nextLevel = level + 1;
+
+              const { data: building, error } =
+                await supabase
+                  .from("building_levels")
+                  .select(
+                    "level,building_name,upgrade_cost,value_increase,income_increase"
+                  )
+                  .eq("level", nextLevel)
+                  .maybeSingle();
+
+              if (error) {
+                throw error;
+              }
+
+              if (!building) {
+                message +=
+                  `🌍 ${country.name}\n` +
+                  `📈 Level: ${level}\n` +
+                  `⚠️ Upgrade configuration unavailable.\n\n`;
+
+                continue;
+              }
+
+              message +=
+                `🌍 ${country.name}\n` +
+                `📈 Current Level: ${level}\n` +
+                `🏗️ Next: ${building.building_name}\n` +
+                `💵 Cost: $${Number(
+                  building.upgrade_cost
+                ).toFixed(2)}\n` +
+                `📊 Value: +$${Number(
+                  building.value_increase
+                ).toFixed(2)}\n` +
+                `💰 Income: +$${Number(
+                  building.income_increase
+                ).toFixed(2)}/hour\n\n`;
+
+              buttons.push([
+                {
+                  text: `🔨 Upgrade ${country.name}`,
+                  callback_data:
+                    `upgrade_country:${country.id}`,
+                },
+              ]);
+            }
+
+            await telegramRequest(
+              "sendMessage",
+              {
+                chat_id: chatId,
+                text: message,
+                reply_markup: {
+                  inline_keyboard: buttons,
+                },
+              }
+            );
+          } catch (error) {
+            console.error(
+              "Upgrade country menu error:",
+              error
+            );
+
+            await sendMessage(
+              chatId,
+              "❌ Unable to load upgrade options right now.",
+              mainMenu()
+            );
+          }
+
+          continue;
         }
 
         if (text === "💰 My Balance") {
