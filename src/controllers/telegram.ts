@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase } from "../config/supabase.js";
 import {
   buyCountry,
   sellCountry,
@@ -157,6 +157,74 @@ const pendingOfferCountry =
 const pendingOfferPrice =
   new Map<number, number>();
 
+const COUNTRY_BUILDING_CONFIG = {
+  silver: {
+    1: { name: "Ministry of Defense", cost: 100, income: 25 },
+    2: { name: "Army Base", cost: 75, income: 15 },
+    3: { name: "Missile Base", cost: 100, income: 20 },
+    4: { name: "Air Force Base", cost: 75, income: 15 },
+    5: { name: "Naval Fleet", cost: 100, income: 20 },
+  },
+  gold: {
+    1: { name: "Ministry of Defense", cost: 150, income: 35 },
+    2: { name: "Army Base", cost: 125, income: 25 },
+    3: { name: "Missile Base", cost: 150, income: 30 },
+    4: { name: "Air Force Base", cost: 125, income: 25 },
+    5: { name: "Naval Fleet", cost: 150, income: 25 },
+  },
+  platinum: {
+    1: { name: "Ministry of Defense", cost: 200, income: 45 },
+    2: { name: "Army Base", cost: 175, income: 35 },
+    3: { name: "Missile Base", cost: 200, income: 40 },
+    4: { name: "Air Force Base", cost: 175, income: 35 },
+    5: { name: "Naval Fleet", cost: 200, income: 40 },
+  },
+} as const;
+
+function getCountryBuilding(category?: string | null, level?: number | null) {
+  const normalizedCategory = String(category ?? "silver").trim().toLowerCase();
+  const config =
+    COUNTRY_BUILDING_CONFIG[
+      normalizedCategory as keyof typeof COUNTRY_BUILDING_CONFIG
+    ] ?? COUNTRY_BUILDING_CONFIG.silver;
+
+  return config[(Number(level ?? 0)) as keyof typeof config];
+}
+
+function getCountryDailyIncome(country: {
+  base_daily_income?: number | string | null;
+  daily_income?: number | string | null;
+  category?: string | null;
+  upgrade_level?: number | string | null;
+}) {
+  const currentLevel = Number(country.upgrade_level ?? 0);
+  const category = String(country.category ?? "silver").trim().toLowerCase();
+  const config =
+    COUNTRY_BUILDING_CONFIG[
+      category as keyof typeof COUNTRY_BUILDING_CONFIG
+    ] ?? COUNTRY_BUILDING_CONFIG.silver;
+
+  let baseIncome = Number(
+    country.base_daily_income ??
+      country.daily_income ??
+      0
+  );
+
+  let completedBuildingIncome = 0;
+
+  for (let level = 1; level <= currentLevel; level += 1) {
+    completedBuildingIncome += Number(
+      config[level as keyof typeof config]?.income ?? 0
+    );
+  }
+
+  if (baseIncome <= 0 && country.daily_income !== undefined) {
+    baseIncome = Number(country.daily_income ?? 0) - completedBuildingIncome;
+  }
+
+  return Math.max(0, baseIncome + completedBuildingIncome);
+}
+
 async function findUserByTelegramId(
   telegramUserId: number
 ) {
@@ -228,7 +296,7 @@ async function getPlayerCountries(
     await supabase
       .from("countries")
       .select(
-        "id,name,code,current_price,hourly_income,upgrade_level"
+        "id,name,code,current_price,daily_income,upgrade_level,category,base_price"
       )
       .eq("owner_id", player.id)
       .order("name");
@@ -249,7 +317,7 @@ async function getMarketCountries() {
   const { data, error } = await supabase
     .from("countries")
     .select(
-      "id,name,code,current_price,hourly_income,upgrade_level"
+      "id,name,code,current_price,daily_income,upgrade_level,category,base_price"
     )
     .is("owner_id", null)
     .order("name");
@@ -294,8 +362,9 @@ async function getOtherPlayersCountries(
       name,
       code,
       current_price,
-      hourly_income,
+      daily_income,
       upgrade_level,
+      category,
       owner_id,
       owner:users!countries_owner_id_fkey(
         name
@@ -411,7 +480,7 @@ async function sendMarketPage(
         Number(country.current_price);
 
       const income =
-        Number(country.hourly_income);
+        getCountryDailyIncome(country);
 
       const level =
         Number(country.upgrade_level);
@@ -425,7 +494,7 @@ async function sendMarketPage(
         `${code} ${country.name}\n` +
         `💵 Price: $${price.toFixed(2)}\n` +
         `📈 Level: ${level}\n` +
-        `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+        `💰 Income: $${income.toFixed(2)}/day\n\n`;
 
       buttons.push([
         {
@@ -501,7 +570,7 @@ async function sendMarketPage(
         Number(country.current_price);
 
       const income =
-        Number(country.hourly_income);
+        getCountryDailyIncome(country);
 
       const level =
         Number(country.upgrade_level);
@@ -527,7 +596,7 @@ async function sendMarketPage(
         `👤 Owner: ${ownerName ?? "Unknown"}\n` +
         `💵 Value: $${price.toFixed(2)}\n` +
         `📈 Level: ${level}\n` +
-        `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+        `💰 Income: $${income.toFixed(2)}/day\n\n`;
 
       buttons.push([
         {
@@ -1041,7 +1110,7 @@ async function startTelegramBot() {
                 await supabase
                   .from("countries")
                   .select(
-                    "id,name,current_price,hourly_income,upgrade_level,owner_id"
+                    "id,name,current_price,daily_income,upgrade_level,owner_id,category"
                   )
                   .eq("id", countryId)
                   .single();
@@ -1092,16 +1161,12 @@ async function startTelegramBot() {
               const nextLevel =
                 currentLevel + 1;
 
-              const { data: building, error: buildingError } =
-                await supabase
-                  .from("building_levels")
-                  .select(
-                    "level,building_name,upgrade_cost,value_increase,income_increase"
-                  )
-                  .eq("level", nextLevel)
-                  .single();
+              const building = getCountryBuilding(
+                country.category,
+                nextLevel
+              );
 
-              if (buildingError || !building) {
+              if (!building) {
                 throw new Error(
                   "BUILDING_CONFIGURATION_NOT_FOUND"
                 );
@@ -1112,7 +1177,7 @@ async function startTelegramBot() {
                 Number(player.reserved_balance ?? 0);
 
               const cost =
-                Number(building.upgrade_cost);
+                Number(building.cost);
 
               if (available < cost) {
                 await answerCallbackQuery(
@@ -1149,14 +1214,11 @@ async function startTelegramBot() {
                       `🔨 UPGRADE ${country.name}\n\n` +
                       `📈 Current Level: ${currentLevel}\n` +
                       `📈 New Level: ${nextLevel}\n\n` +
-                      `🏗️ Building: ${building.building_name}\n` +
+                      `🏗️ Building: ${building.name}\n` +
                       `💵 Cost: $${cost.toFixed(2)}\n` +
-                      `📊 Country Value: +$${Number(
-                        building.value_increase
-                      ).toFixed(2)}\n` +
-                      `💰 Hourly Income: +$${Number(
-                        building.income_increase
-                      ).toFixed(2)}/hour\n\n` +
+                      `💰 Daily Income: +$${Number(
+                        building.income
+                      ).toFixed(2)}/day\n\n` +
                       `Are you sure you want to upgrade?`,
                     reply_markup: {
                       inline_keyboard: [
@@ -1242,7 +1304,7 @@ async function startTelegramBot() {
                   await supabase
                     .from("countries")
                     .select(
-                      "name,current_price,hourly_income,upgrade_level"
+                      "name,current_price,daily_income,upgrade_level"
                     )
                     .eq("id", countryId)
                     .maybeSingle();
@@ -1261,8 +1323,8 @@ async function startTelegramBot() {
                     country?.current_price ?? 0
                   ).toFixed(2)}\n` +
                   `💰 New Income: $${Number(
-                    country?.hourly_income ?? 0
-                  ).toFixed(2)}/hour\n\n` +
+                    country?.daily_income ?? 0
+                  ).toFixed(2)}/day\n\n` +
                   `🏗️ Your country has been upgraded successfully.`,
                   mainMenu()
                 );
@@ -1404,7 +1466,7 @@ async function startTelegramBot() {
                 Number(country.current_price);
 
               const income =
-                Number(country.hourly_income);
+                getCountryDailyIncome(country);
 
               const level =
                 Number(country.upgrade_level);
@@ -1418,7 +1480,7 @@ async function startTelegramBot() {
                 `${code} ${country.name}\n` +
                 `💵 Price: $${price.toFixed(2)}\n` +
                 `📈 Level: ${level}\n` +
-                `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+                `💰 Income: $${income.toFixed(2)}/day\n\n`;
 
               buttons.push([
                 {
@@ -1484,7 +1546,7 @@ async function startTelegramBot() {
                 await supabase
                   .from("countries")
                   .select(
-                    "id,name,code,current_price,hourly_income,upgrade_level"
+                    "id,name,code,current_price,daily_income,upgrade_level,category"
                   )
                   .eq("id", countryId)
                   .single();
@@ -1510,7 +1572,7 @@ async function startTelegramBot() {
                       `🛒 ${country.name}\n\n` +
                       `💵 Price: $${Number(country.current_price).toFixed(2)}\n` +
                       `📈 Level: ${Number(country.upgrade_level)}\n` +
-                      `💰 Income: $${Number(country.hourly_income).toFixed(2)}/hour\n\n` +
+                      `💰 Income: $${getCountryDailyIncome(country).toFixed(2)}/day\n\n` +
                       `Are you sure you want to buy ${country.name}?`,
                     reply_markup: {
                       inline_keyboard: [
@@ -1575,7 +1637,7 @@ async function startTelegramBot() {
                   await supabase
                     .from("countries")
                     .select(
-                      "name,current_price,hourly_income"
+                      "name,current_price,daily_income,category,upgrade_level"
                     )
                     .eq("id", countryId)
                     .maybeSingle();
@@ -1592,8 +1654,10 @@ async function startTelegramBot() {
                   callbackChatId,
                   `🎉 Country purchased successfully!\n\n` +
                   `🌍 ${countryName}\n` +
-                  `💵 Purchase price: $${price.toFixed(2)}\n\n` +
-                  `You now own this country and will receive its hourly income.`,
+                  `💵 Purchase price: $${price.toFixed(2)}\n` +
+                  `📈 Level: ${Number(country?.upgrade_level ?? 0)}\n` +
+                  `💰 Daily income: $${getCountryDailyIncome(country ?? {}).toFixed(2)}/day\n\n` +
+                  `You now own this country and will receive its daily income.`,
                   mainMenu()
                 );
               }
@@ -1659,7 +1723,7 @@ async function startTelegramBot() {
                 await supabase
                   .from("countries")
                   .select(
-                    "id,name,current_price,hourly_income,upgrade_level,owner_id"
+                    "id,name,current_price,daily_income,upgrade_level,owner_id,category"
                   )
                   .eq("id", countryId)
                   .single();
@@ -1715,9 +1779,7 @@ async function startTelegramBot() {
                       `📈 Level: ${Number(
                         country.upgrade_level
                       )}\n` +
-                      `💰 Income: $${Number(
-                        country.hourly_income
-                      ).toFixed(2)}/hour\n\n` +
+                      `💰 Income: $${getCountryDailyIncome(country).toFixed(2)}/day\n\n` +
                       `Are you sure you want to sell this country?`,
                     reply_markup: {
                       inline_keyboard: [
@@ -2859,19 +2921,10 @@ async function startTelegramBot() {
               }
 
               const nextLevel = level + 1;
-
-              const { data: building, error } =
-                await supabase
-                  .from("building_levels")
-                  .select(
-                    "level,building_name,upgrade_cost,value_increase,income_increase"
-                  )
-                  .eq("level", nextLevel)
-                  .maybeSingle();
-
-              if (error) {
-                throw error;
-              }
+              const building = getCountryBuilding(
+                country.category,
+                nextLevel
+              );
 
               if (!building) {
                 message +=
@@ -2885,16 +2938,13 @@ async function startTelegramBot() {
               message +=
                 `🌍 ${country.name}\n` +
                 `📈 Current Level: ${level}\n` +
-                `🏗️ Next: ${building.building_name}\n` +
+                `🏗️ Next: ${building.name}\n` +
                 `💵 Cost: $${Number(
-                  building.upgrade_cost
+                  building.cost
                 ).toFixed(2)}\n` +
-                `📊 Value: +$${Number(
-                  building.value_increase
-                ).toFixed(2)}\n` +
-                `💰 Income: +$${Number(
-                  building.income_increase
-                ).toFixed(2)}/hour\n\n`;
+                `💰 Daily Income: +$${Number(
+                  building.income
+                ).toFixed(2)}/day\n\n`;
 
               buttons.push([
                 {
@@ -3033,7 +3083,7 @@ async function startTelegramBot() {
           let message =
             "🌍 MY COUNTRIES\n\n";
 
-          let totalHourlyIncome = 0;
+          let totalDailyIncome = 0;
           let totalValue = 0;
 
           const buttons: unknown[][] = [];
@@ -3043,13 +3093,13 @@ async function startTelegramBot() {
               Number(country.current_price);
 
             const income =
-              Number(country.hourly_income);
+              getCountryDailyIncome(country);
 
             const level =
               Number(country.upgrade_level);
 
             totalValue += price;
-            totalHourlyIncome += income;
+            totalDailyIncome += income;
 
             const flag =
               country.code
@@ -3060,27 +3110,29 @@ async function startTelegramBot() {
               `${flag} ${country.name}\n` +
               `💵 Value: $${price.toFixed(2)}\n` +
               `📈 Level: ${level}\n` +
-              `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+              `💰 Income: $${income.toFixed(2)}/day\n\n`;
 
-            buttons.push([
-              {
-                text: `💰 Sell ${country.name}`,
-                callback_data:
-                  `sell_country:${country.id}`,
-              },
-              {
-                text: `📩 Offers ${country.name}`,
-                callback_data:
-                  `country_offers:${country.id}`,
-              },
-            ]);
+            if (level > 0) {
+              buttons.push([
+                {
+                  text: `💰 Sell ${country.name}`,
+                  callback_data:
+                    `sell_country:${country.id}`,
+                },
+                {
+                  text: `📩 Offers ${country.name}`,
+                  callback_data:
+                    `country_offers:${country.id}`,
+                },
+              ]);
+            }
           }
 
           message +=
             "━━━━━━━━━━━━━━\n" +
             `🌍 Countries: ${countries.length}\n` +
             `💵 Total value: $${totalValue.toFixed(2)}\n` +
-            `💰 Hourly income: $${totalHourlyIncome.toFixed(2)}`;
+            `💰 Daily income: $${totalDailyIncome.toFixed(2)}`;
 
           await telegramRequest(
             "sendMessage",

@@ -1,8 +1,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { supabase } from "./supabase.js";
-import "./telegram.js";
+import { supabase } from "./config/supabase.js";
+import "./controllers/telegram.js";
 import {
   createPlayer,
   getPlayer,
@@ -17,7 +17,7 @@ import {
   getDailyLeaderboard,
   adminAdjustBalance,
   adminUpdateCountry,
-} from "./game.js";
+} from "./controllers/game.js";
 
 dotenv.config();
 
@@ -504,7 +504,11 @@ app.post(
           admin.id,
           req.params.countryId,
           Number(req.body.currentPrice),
-          Number(req.body.hourlyIncome),
+          Number(
+            req.body.dailyIncome ??
+              req.body.hourlyIncome ??
+              0
+          ),
           req.body.reason
         );
 
