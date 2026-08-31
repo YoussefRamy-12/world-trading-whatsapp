@@ -1,5 +1,6 @@
 import { supabase } from "./supabase.js";
 
+
 export async function createPlayer(
   whatsappNumber: string,
   name: string

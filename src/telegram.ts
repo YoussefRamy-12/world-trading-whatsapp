@@ -1,5 +1,13 @@
 import { supabase } from "./supabase.js";
-import { buyCountry } from "./game.js";
+import {
+  buyCountry,
+  sellCountry,
+  collectPlayerIncome,
+  getLeaderboard,
+  createCountryOffer,
+  acceptCountryOffer,
+  cancelCountryOffer,
+} from "./game.js";
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
 if (!token) {
@@ -138,6 +146,16 @@ const registrationState =
 const pendingRegistrationPhones =
   new Map<number, string>();
 
+/*
+* Player is currently entering an offer price
+* for this country.
+*/
+const pendingOfferCountry =
+  new Map<number, string>();
+
+const pendingOfferPrice =
+  new Map<number, number>();
+
 async function findUserByTelegramId(
   telegramUserId: number
 ) {
@@ -166,7 +184,7 @@ async function getPlayerBalance(
 ) {
   const { data, error } = await supabase
     .from("users")
-    .select("name,balance,reserved_balance")
+    .select("id,name,balance,reserved_balance")
     .eq(
       "telegram_user_id",
       telegramUserId
@@ -242,6 +260,180 @@ async function getMarketCountries() {
   }
 
   return data ?? [];
+}
+
+async function getOtherPlayersCountries(
+  telegramUserId: number
+) {
+  const { data: player, error: playerError } =
+    await supabase
+      .from("users")
+      .select("id")
+      .eq(
+        "telegram_user_id",
+        telegramUserId
+      )
+      .maybeSingle();
+
+  if (playerError) {
+    throw new Error(
+      `Player lookup failed: ${playerError.message}`
+    );
+  }
+
+  if (!player) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("countries")
+    .select(
+      `
+      id,
+      name,
+      code,
+      current_price,
+      hourly_income,
+      upgrade_level,
+      owner_id,
+      owner:users!countries_owner_id_fkey(
+        name
+      )
+      `
+    )
+    .not("owner_id", "is", null)
+    .neq("owner_id", player.id)
+    .order("name");
+
+  if (error) {
+    throw new Error(
+      `Other players countries lookup failed: ${error.message}`
+    );
+  }
+
+  return data ?? [];
+}
+
+async function getPlayerOffers(
+  telegramUserId: number
+) {
+  const { data: player, error: playerError } =
+    await supabase
+      .from("users")
+      .select("id,name")
+      .eq("telegram_user_id", telegramUserId)
+      .maybeSingle();
+
+  if (playerError) {
+    throw new Error(
+      `Player lookup failed: ${playerError.message}`
+    );
+  }
+
+  if (!player) {
+    return null;
+  }
+
+  const { data: offers, error } =
+    await supabase
+      .from("offers")
+      .select(`
+        id,
+        country_id,
+        buyer_id,
+        seller_id,
+        price,
+        status,
+        created_at,
+        expires_at,
+        countries (
+          id,
+          name,
+          code,
+          current_price
+        ),
+        buyer:users!offers_buyer_id_fkey (
+          id,
+          name
+        )
+      `)
+      .eq("seller_id", player.id)
+      .eq("status", "active")
+      .order("created_at", {
+        ascending: false,
+      });
+
+  if (error) {
+    throw new Error(
+      `Offers lookup failed: ${error.message}`
+    );
+  }
+
+  return {
+    player,
+    offers: offers ?? [],
+  };
+}
+
+async function getPlayerSentOffers(
+  telegramUserId: number
+) {
+  const { data: player, error: playerError } =
+    await supabase
+      .from("users")
+      .select("id,name")
+      .eq("telegram_user_id", telegramUserId)
+      .maybeSingle();
+
+  if (playerError) {
+    throw new Error(
+      `Player lookup failed: ${playerError.message}`
+    );
+  }
+
+  if (!player) {
+    return null;
+  }
+
+  const { data: offers, error } =
+    await supabase
+      .from("offers")
+      .select(`
+        id,
+        country_id,
+        seller_id,
+        buyer_id,
+        price,
+        status,
+        created_at,
+        expires_at,
+        countries (
+          id,
+          name,
+          code,
+          current_price
+        ),
+        seller:users!offers_seller_id_fkey (
+          id,
+          name,
+          telegram_user_id
+        )
+      `)
+      .eq("buyer_id", player.id)
+      .order("created_at", {
+        ascending: false,
+      });
+
+  if (error) {
+    throw new Error(
+      `Sent offers lookup failed: ${error.message}`
+    );
+  }
+
+  return {
+    player,
+    offers: offers ?? [],
+  };
 }
 
 async function purchaseCountry(
@@ -363,6 +555,89 @@ async function linkTelegramAccount(
       `Supabase link failed: ${error.message}`
     );
   }
+}
+
+async function getPlayerIdByTelegramId(
+  telegramUserId: number
+) {
+  const { data, error } = await supabase
+    .from("users")
+    .select("id,name")
+    .eq("telegram_user_id", telegramUserId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Player lookup failed: ${error.message}`
+    );
+  }
+
+  return data;
+}
+
+async function createPlayerCountryOffer(
+  telegramUserId: number,
+  countryId: string,
+  price: number
+) {
+  const player =
+    await getPlayerIdByTelegramId(
+      telegramUserId
+    );
+
+  if (!player) {
+    throw new Error(
+      "TELEGRAM_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  return createCountryOffer(
+    player.id,
+    countryId,
+    price
+  );
+}
+
+async function acceptPlayerCountryOffer(
+  telegramUserId: number,
+  offerId: string
+) {
+  const player =
+    await getPlayerIdByTelegramId(
+      telegramUserId
+    );
+
+  if (!player) {
+    throw new Error(
+      "TELEGRAM_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  return acceptCountryOffer(
+    player.id,
+    offerId
+  );
+}
+
+async function cancelPlayerCountryOffer(
+  telegramUserId: number,
+  offerId: string
+) {
+  const player =
+    await getPlayerIdByTelegramId(
+      telegramUserId
+    );
+
+  if (!player) {
+    throw new Error(
+      "TELEGRAM_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  return cancelCountryOffer(
+    player.id,
+    offerId
+  );
 }
 
 async function startTelegramBot() {
@@ -593,7 +868,717 @@ async function startTelegramBot() {
 
             continue;
           }
+
+          if (
+            callbackData?.startsWith(
+              "confirm_buy:"
+            )
+          ) {
+            const countryId =
+              callbackData.substring(
+                "confirm_buy:".length
+              );
+
+            try {
+              const result =
+                await purchaseCountry(
+                  callbackTelegramUserId,
+                  countryId
+                );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Purchase successful!"
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                const { data: country } =
+                  await supabase
+                    .from("countries")
+                    .select(
+                      "name,current_price,hourly_income"
+                    )
+                    .eq("id", countryId)
+                    .maybeSingle();
+
+                const countryName =
+                  country?.name ?? "country";
+
+                const price =
+                  Number(
+                    country?.current_price ?? 0
+                  );
+
+                await sendMessage(
+                  callbackChatId,
+                  `🎉 Country purchased successfully!\n\n` +
+                  `🌍 ${countryName}\n` +
+                  `💵 Purchase price: $${price.toFixed(2)}\n\n` +
+                  `You now own this country and will receive its hourly income.`,
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Country purchase error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Purchase failed."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  "❌ I couldn't complete this purchase.\n\n" +
+                  "The country may already be owned or you may not have enough available balance.",
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData === "cancel_buy"
+          ) {
+            await answerCallbackQuery(
+              callbackQuery.id,
+              "Purchase cancelled."
+            );
+
+            if (
+              callbackChatId !== undefined
+            ) {
+              await sendMessage(
+                callbackChatId,
+                "❌ Purchase cancelled.",
+                mainMenu()
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData?.startsWith(
+              "sell_country:"
+            )
+          ) {
+            const countryId =
+              callbackData.substring(
+                "sell_country:".length
+              );
+
+            try {
+              const { data: country, error } =
+                await supabase
+                  .from("countries")
+                  .select(
+                    "id,name,current_price,hourly_income,upgrade_level,owner_id"
+                  )
+                  .eq("id", countryId)
+                  .single();
+
+              if (error || !country) {
+                throw new Error(
+                  "COUNTRY_NOT_FOUND"
+                );
+              }
+
+              const { data: player, error: playerError } =
+                await supabase
+                  .from("users")
+                  .select("id")
+                  .eq(
+                    "telegram_user_id",
+                    callbackTelegramUserId
+                  )
+                  .maybeSingle();
+
+              if (playerError || !player) {
+                throw new Error(
+                  "TELEGRAM_ACCOUNT_NOT_LINKED"
+                );
+              }
+
+              if (country.owner_id !== player.id) {
+                await answerCallbackQuery(
+                  callbackQuery.id,
+                  "❌ You don't own this country."
+                );
+
+                continue;
+              }
+
+              await answerCallbackQuery(
+                callbackQuery.id
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await telegramRequest(
+                  "sendMessage",
+                  {
+                    chat_id: callbackChatId,
+                    text:
+                      `🏷️ Sell ${country.name}\n\n` +
+                      `🌍 ${country.name}\n` +
+                      `💵 Current value: $${Number(
+                        country.current_price
+                      ).toFixed(2)}\n` +
+                      `📈 Level: ${Number(
+                        country.upgrade_level
+                      )}\n` +
+                      `💰 Income: $${Number(
+                        country.hourly_income
+                      ).toFixed(2)}/hour\n\n` +
+                      `Are you sure you want to sell this country?`,
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          {
+                            text: "✅ Confirm Sale",
+                            callback_data:
+                              `confirm_sell:${country.id}`,
+                          },
+                          {
+                            text: "❌ Cancel",
+                            callback_data:
+                              "cancel_sell",
+                          },
+                        ],
+                      ],
+                    },
+                  }
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Sell country confirmation error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Unable to load country."
+              );
+            }
+
+            continue;
+          }
+          if (
+            callbackData?.startsWith(
+              "confirm_sell:"
+            )
+          ) {
+            const countryId =
+              callbackData.substring(
+                "confirm_sell:".length
+              );
+
+            try {
+              const { data: player, error } =
+                await supabase
+                  .from("users")
+                  .select("id")
+                  .eq(
+                    "telegram_user_id",
+                    callbackTelegramUserId
+                  )
+                  .maybeSingle();
+
+              if (error || !player) {
+                throw new Error(
+                  "TELEGRAM_ACCOUNT_NOT_LINKED"
+                );
+              }
+
+              const result =
+                await sellCountry(
+                  player.id,
+                  countryId
+                );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Country sold!"
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                const { data: country } =
+                  await supabase
+                    .from("countries")
+                    .select(
+                      "name,current_price"
+                    )
+                    .eq("id", countryId)
+                    .maybeSingle();
+
+                const countryName =
+                  country?.name ?? "country";
+
+                const salePrice =
+                  Number(
+                    country?.current_price ?? 0
+                  );
+
+                await sendMessage(
+                  callbackChatId,
+                  `💰 Country sold successfully!\n\n` +
+                  `🌍 ${countryName}\n` +
+                  `💵 Sale value: $${salePrice.toFixed(2)}\n\n` +
+                  `The country is now available in the market.`,
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Country sale error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Sale failed."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  "❌ I couldn't sell this country.\n\n" +
+                  "The country may no longer be owned by you.",
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+          if (
+            callbackData === "cancel_sell"
+          ) {
+            await answerCallbackQuery(
+              callbackQuery.id,
+              "Sale cancelled."
+            );
+
+            if (
+              callbackChatId !== undefined
+            ) {
+              await sendMessage(
+                callbackChatId,
+                "❌ Sale cancelled.",
+                mainMenu()
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData?.startsWith(
+              "accept_offer:"
+            )
+          ) {
+            const offerId =
+              callbackData.substring(
+                "accept_offer:".length
+              );
+
+            try {
+              const seller = await findUserByTelegramId(
+                callbackTelegramUserId
+              );
+
+              if (!seller) {
+                throw new Error("PLAYER_NOT_FOUND");
+              }
+
+              const result =
+                await acceptCountryOffer(
+                  seller.id,
+                  offerId
+                );
+
+              console.log(
+                "Country offer accepted:",
+                result
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Offer accepted!"
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  "✅ Offer accepted successfully!\n\n" +
+                  "💰 The buyer's payment has been transferred to you.\n" +
+                  "🌍 The country has been transferred to the buyer.",
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Accept offer error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Could not accept offer."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  "❌ I couldn't accept this offer.\n\n" +
+                  "The offer may have expired, already been accepted, or is no longer valid.",
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData?.startsWith(
+              "cancel_offer:"
+            )
+          ) {
+            const offerId =
+              callbackData.substring(
+                "cancel_offer:".length
+              );
+
+            try {
+              const buyer = await findUserByTelegramId(
+                callbackTelegramUserId
+              );
+
+              if (!buyer) {
+                throw new Error("PLAYER_NOT_FOUND");
+              }
+
+              const result =
+                await cancelCountryOffer(
+                  buyer.id,
+                  offerId
+                );
+
+              console.log(
+                "Country offer cancelled:",
+                result
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Offer cancelled."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  "❌ Offer cancelled successfully.\n\n" +
+                  "The reserved money has been released.",
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Cancel offer error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Could not cancel offer."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  "❌ I couldn't cancel this offer.\n\n" +
+                  "It may have already been accepted, cancelled, or expired.",
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData?.startsWith(
+              "make_offer:"
+            )
+          ) {
+            const countryId =
+              callbackData.substring(
+                "make_offer:".length
+              );
+
+            try {
+              const { data: country, error } =
+                await supabase
+                  .from("countries")
+                  .select(
+                    "id,name,current_price,owner_id"
+                  )
+                  .eq("id", countryId)
+                  .single();
+
+              if (error || !country) {
+                throw new Error(
+                  "COUNTRY_NOT_FOUND"
+                );
+              }
+
+              await answerCallbackQuery(
+                callbackQuery.id
+              );
+
+              pendingOfferCountry.set(
+                callbackTelegramUserId,
+                country.id
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  `💰 Make an offer for ${country.name}\n\n` +
+                  `Current value: $${Number(
+                    country.current_price
+                  ).toFixed(2)}\n\n` +
+                  `Please enter your offer amount.\n\n` +
+                  `Example:\n25000`
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Make offer error:",
+                error
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Unable to create offer"
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData ===
+            "confirm_offer"
+          ) {
+            const countryId =
+              pendingOfferCountry.get(
+                callbackTelegramUserId
+              );
+
+            const price =
+              pendingOfferPrice.get(
+                callbackTelegramUserId
+              );
+
+            if (!countryId || price === undefined) {
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Offer session expired."
+              );
+
+              continue;
+            }
+
+            try {
+              const result =
+                await createPlayerCountryOffer(
+                  callbackTelegramUserId,
+                  countryId,
+                  price
+                );
+
+              pendingOfferCountry.delete(
+                callbackTelegramUserId
+              );
+
+              pendingOfferPrice.delete(
+                callbackTelegramUserId
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Offer sent!"
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                const expiresAt =
+                  result?.expiresAt
+                    ? new Date(result.expiresAt).toLocaleString(
+                      "en-GB",
+                      {
+                        timeZone: "Africa/Cairo",
+                        hour12: false,
+                      }
+                    )
+                    : "soon";
+                await sendMessage(
+                  callbackChatId,
+                  `📩 Offer sent successfully!\n\n` +
+                  `🌍 ${result?.country ?? "Country"}\n` +
+                  `💰 Offer: $${Number(
+                    result?.price ?? price
+                  ).toFixed(2)}\n\n` +
+                  `💳 The amount has been reserved.\n` +
+                  `⏰ Expires: ${expiresAt}`,
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Create offer error:",
+                error
+              );
+
+              pendingOfferCountry.delete(
+                callbackTelegramUserId
+              );
+
+              pendingOfferPrice.delete(
+                callbackTelegramUserId
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Offer failed."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  `❌ Couldn't create the offer.\n\n` +
+                  `${formatOfferError(error)}`,
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+
+          if (
+            callbackData ===
+            "cancel_offer_input"
+          ) {
+            pendingOfferCountry.delete(
+              callbackTelegramUserId
+            );
+
+            pendingOfferPrice.delete(
+              callbackTelegramUserId
+            );
+
+            await answerCallbackQuery(
+              callbackQuery.id,
+              "Offer cancelled."
+            );
+
+            if (
+              callbackChatId !== undefined
+            ) {
+              await sendMessage(
+                callbackChatId,
+                "❌ Offer creation cancelled.",
+                mainMenu()
+              );
+            }
+
+            continue;
+          }
         }
+        function formatOfferError(
+          error: unknown
+        ) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : String(error);
+
+          if (
+            message.includes(
+              "PRICE_BELOW_MINIMUM"
+            )
+          ) {
+            return "Your offer is below the allowed minimum price.";
+          }
+
+          if (
+            message.includes(
+              "PRICE_ABOVE_MAXIMUM"
+            )
+          ) {
+            return "Your offer is above the allowed maximum price.";
+          }
+
+          if (
+            message.includes(
+              "INSUFFICIENT_AVAILABLE_BALANCE"
+            )
+          ) {
+            return "You don't have enough available balance.";
+          }
+
+          if (
+            message.includes(
+              "CANNOT_OFFER_ON_OWN_COUNTRY"
+            )
+          ) {
+            return "You cannot make an offer on your own country.";
+          }
+
+          if (
+            message.includes(
+              "COUNTRY_NOT_OWNED"
+            )
+          ) {
+            return "This country is not owned by another player.";
+          }
+
+          return "Please check the country and your balance and try again.";
+        }
+
+
         const message =
           update.message;
 
@@ -869,42 +1854,212 @@ async function startTelegramBot() {
           }
         }
 
+        const pendingCountryId =
+          pendingOfferCountry.get(
+            telegramUserId
+          );
+
+        if (pendingCountryId) {
+          const priceText =
+            text.replace(/[$,\s]/g, "");
+
+          const price =
+            Number(priceText);
+
+          if (
+            !Number.isFinite(price) ||
+            price <= 0
+          ) {
+            await sendMessage(
+              chatId,
+              "❌ Invalid offer amount.\n\n" +
+              "Please enter a positive number.\n\n" +
+              "Example: 25000"
+            );
+
+            continue;
+          }
+
+          try {
+            const { data: country, error } =
+              await supabase
+                .from("countries")
+                .select(
+                  "id,name,current_price"
+                )
+                .eq("id", pendingCountryId)
+                .single();
+
+            if (error || !country) {
+              throw new Error(
+                "COUNTRY_NOT_FOUND"
+              );
+            }
+
+            const { data: player } =
+              await supabase
+                .from("users")
+                .select(
+                  "id,balance,reserved_balance"
+                )
+                .eq(
+                  "telegram_user_id",
+                  telegramUserId
+                )
+                .maybeSingle();
+
+            if (!player) {
+              throw new Error(
+                "TELEGRAM_ACCOUNT_NOT_LINKED"
+              );
+            }
+
+            const available =
+              Number(player.balance ?? 0) -
+              Number(player.reserved_balance ?? 0);
+
+            if (available < price) {
+              await sendMessage(
+                chatId,
+                `❌ Insufficient available balance.\n\n` +
+                `Your available balance: $${available.toFixed(2)}\n` +
+                `Your offer: $${price.toFixed(2)}`
+              );
+
+              pendingOfferCountry.delete(
+                telegramUserId
+              );
+
+              continue;
+            }
+
+            await telegramRequest(
+              "sendMessage",
+              {
+                chat_id: chatId,
+                text:
+                  `📩 Offer Preview\n\n` +
+                  `🌍 ${country.name}\n` +
+                  `💵 Current value: $${Number(
+                    country.current_price
+                  ).toFixed(2)}\n` +
+                  `💰 Your offer: $${price.toFixed(2)}\n\n` +
+                  `If you confirm, this amount will be reserved from your balance.`,
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "✅ Confirm Offer",
+                        callback_data:
+                          "confirm_offer",
+                      },
+                      {
+                        text: "❌ Cancel",
+                        callback_data:
+                          "cancel_offer_input",
+                      },
+                    ],
+                  ],
+                },
+              }
+            );
+
+            /*
+             * Store the price temporarily using a
+             * second map.
+             */
+
+            pendingOfferPrice.set(
+              telegramUserId,
+              price
+            );
+
+            continue;
+          } catch (error) {
+            console.error(
+              "Offer preparation error:",
+              error
+            );
+
+            pendingOfferCountry.delete(
+              telegramUserId
+            );
+
+            await sendMessage(
+              chatId,
+              "❌ I couldn't prepare this offer.\n\n" +
+              "Please try again."
+            );
+
+            continue;
+          }
+        }
+
         if (text === "💰 My Balance") {
           const player =
             await getPlayerBalance(
               telegramUserId
             );
 
-
-
           if (!player) {
             await sendMessage(
               chatId,
-              "❌ Your Telegram account is not linked to a game account."
+              "❌ Your Telegram account is not linked to a game account.",
+              mainMenu()
             );
 
             continue;
           }
 
-          const balance =
-            Number(player.balance ?? 0);
-
-          const reserved =
-            Number(
-              player.reserved_balance ?? 0
+          try {
+            // Collect any pending country income.
+            await collectPlayerIncome(
+              player.id
             );
 
-          const total =
-            balance + reserved;
+            // Get the fresh balance after income collection.
+            const updatedPlayer =
+              await getPlayerBalance(
+                telegramUserId
+              );
 
-          await sendMessage(
-            chatId,
-            `💰 My Balance\n\n` +
-            `Available: $${balance.toFixed(2)}\n` +
-            `Reserved: $${reserved.toFixed(2)}\n` +
-            `Total: $${total.toFixed(2)}`,
-            mainMenu()
-          );
+            if (!updatedPlayer) {
+              throw new Error(
+                "PLAYER_NOT_FOUND"
+              );
+            }
+
+            const balance =
+              Number(updatedPlayer.balance ?? 0);
+
+            const reserved =
+              Number(
+                updatedPlayer.reserved_balance ?? 0
+              );
+
+            const total =
+              balance + reserved;
+
+            await sendMessage(
+              chatId,
+              `💰 My Balance\n\n` +
+              `Available: $${balance.toFixed(2)}\n` +
+              `Reserved: $${reserved.toFixed(2)}\n` +
+              `Total: $${total.toFixed(2)}`,
+              mainMenu()
+            );
+          } catch (error) {
+            console.error(
+              "Balance error:",
+              error
+            );
+
+            await sendMessage(
+              chatId,
+              "❌ I couldn't load your balance right now.\n\nPlease try again.",
+              mainMenu()
+            );
+          }
 
           continue;
         }
@@ -940,10 +2095,12 @@ async function startTelegramBot() {
           }
 
           let message =
-            "🌍 My Countries\n\n";
+            "🌍 MY COUNTRIES\n\n";
 
           let totalHourlyIncome = 0;
           let totalValue = 0;
+
+          const buttons: unknown[][] = [];
 
           for (const country of countries) {
             const price =
@@ -968,6 +2125,19 @@ async function startTelegramBot() {
               `💵 Value: $${price.toFixed(2)}\n` +
               `📈 Level: ${level}\n` +
               `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+
+            buttons.push([
+              {
+                text: `💰 Sell ${country.name}`,
+                callback_data:
+                  `sell_country:${country.id}`,
+              },
+              {
+                text: `📩 Offers ${country.name}`,
+                callback_data:
+                  `country_offers:${country.id}`,
+              },
+            ]);
           }
 
           message +=
@@ -976,117 +2146,390 @@ async function startTelegramBot() {
             `💵 Total value: $${totalValue.toFixed(2)}\n` +
             `💰 Hourly income: $${totalHourlyIncome.toFixed(2)}`;
 
-          await sendMessage(
-            chatId,
-            message,
-            mainMenu()
-          );
-
-          continue;
-        }
-
-        if (text === "🏪 Market") {
-          const countries =
-            await getMarketCountries();
-
-          if (countries.length === 0) {
-            await sendMessage(
-              chatId,
-              "🏪 Market\n\n" +
-              "There are currently no countries available for purchase.",
-              mainMenu()
-            );
-
-            continue;
-          }
-
-          const pageSize = 8;
-          const page = 0;
-          const totalPages =
-            Math.ceil(countries.length / pageSize);
-
-          const start = page * pageSize;
-
-          const pageCountries =
-            countries.slice(
-              start,
-              start + pageSize
-            );
-
-          let marketMessage =
-            `🏪 MARKET — Page ${page + 1}/${totalPages}\n\n`;
-
-          const buttons: unknown[][] = [];
-
-          for (const country of pageCountries) {
-            const price =
-              Number(country.current_price);
-
-            const income =
-              Number(country.hourly_income);
-
-            const level =
-              Number(country.upgrade_level);
-
-            const code =
-              country.code
-                ? `🌐 ${country.code}`
-                : "🌍";
-
-            marketMessage +=
-              `${code} ${country.name}\n` +
-              `💵 Price: $${price.toFixed(2)}\n` +
-              `📈 Level: ${level}\n` +
-              `💰 Income: $${income.toFixed(2)}/hour\n\n`;
-
-            buttons.push([
-              {
-                text: `🛒 Buy ${country.name}`,
-                callback_data:
-                  `buy_country:${country.id}`,
-              },
-            ]);
-          }
-
-          const navigationButtons: unknown[] = [];
-
-          if (page > 0) {
-            navigationButtons.push({
-              text: "◀️ Previous",
-              callback_data:
-                `market_page:${page - 1}`,
-            });
-          }
-
-          if (page < totalPages - 1) {
-            navigationButtons.push({
-              text: "Next ▶️",
-              callback_data:
-                `market_page:${page + 1}`,
-            });
-          }
-
-          if (navigationButtons.length > 0) {
-            buttons.push(navigationButtons);
-          }
-
-          marketMessage +=
-            "━━━━━━━━━━━━━━\n" +
-            `Showing ${start + 1}-${Math.min(
-              start + pageSize,
-              countries.length
-            )} of ${countries.length}`;
-
           await telegramRequest(
             "sendMessage",
             {
               chat_id: chatId,
-              text: marketMessage,
+              text: message,
               reply_markup: {
                 inline_keyboard: buttons,
               },
             }
           );
+
+          continue;
+        }
+
+        if (text === "📊 Leaderboard") {
+          try {
+            const leaderboard =
+              await getLeaderboard();
+
+            if (
+              !leaderboard ||
+              leaderboard.length === 0
+            ) {
+              await sendMessage(
+                chatId,
+                "📊 Leaderboard\n\n" +
+                "No players found yet.",
+                mainMenu()
+              );
+
+              continue;
+            }
+
+            let message =
+              "🏆 LEADERBOARD\n\n";
+
+            for (
+              let i = 0;
+              i < leaderboard.length;
+              i++
+            ) {
+              const player =
+                leaderboard[i];
+
+              const rank =
+                Number(
+                  player.rank ?? i + 1
+                );
+
+              const name =
+                player.name ??
+                "Unknown Player";
+
+              const netWorth =
+                Number(
+                  player.net_worth ??
+                  player.total_value ??
+                  0
+                );
+
+              let medal = "";
+
+              if (rank === 1) {
+                medal = "🥇 ";
+              } else if (rank === 2) {
+                medal = "🥈 ";
+              } else if (rank === 3) {
+                medal = "🥉 ";
+              }
+
+              message +=
+                `${medal}${rank}. ${name}\n` +
+                `💰 Net Worth: $${netWorth.toFixed(2)}\n\n`;
+            }
+
+            await sendMessage(
+              chatId,
+              message,
+              mainMenu()
+            );
+          } catch (error) {
+            console.error(
+              "Leaderboard error:",
+              error
+            );
+
+            await sendMessage(
+              chatId,
+              "❌ Unable to load the leaderboard right now.",
+              mainMenu()
+            );
+          }
+
+          continue;
+        }
+
+        if (text === "🏪 Market") {
+          try {
+            const availableCountries =
+              await getMarketCountries();
+
+            const playerCountries =
+              await getOtherPlayersCountries(
+                telegramUserId
+              );
+
+            let marketMessage =
+              "🏪 MARKET\n\n";
+
+            const buttons: unknown[][] = [];
+
+            /*
+             * ==========================================
+             * AVAILABLE COUNTRIES
+             * ==========================================
+             */
+
+            marketMessage +=
+              "🟢 AVAILABLE COUNTRIES\n\n";
+
+            if (availableCountries.length === 0) {
+              marketMessage +=
+                "No unowned countries are currently available.\n\n";
+            } else {
+              const pageSize = 8;
+              const page = 0;
+
+              const pageCountries =
+                availableCountries.slice(
+                  0,
+                  pageSize
+                );
+
+              for (const country of pageCountries) {
+                const price =
+                  Number(country.current_price);
+
+                const income =
+                  Number(country.hourly_income);
+
+                const level =
+                  Number(country.upgrade_level);
+
+                const code =
+                  country.code
+                    ? `🌐 ${country.code}`
+                    : "🌍";
+
+                marketMessage +=
+                  `${code} ${country.name}\n` +
+                  `💵 Price: $${price.toFixed(2)}\n` +
+                  `📈 Level: ${level}\n` +
+                  `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+
+                buttons.push([
+                  {
+                    text: `🛒 Buy ${country.name}`,
+                    callback_data:
+                      `buy_country:${country.id}`,
+                  },
+                ]);
+              }
+            }
+
+            marketMessage +=
+              "━━━━━━━━━━━━━━\n\n";
+
+            /*
+             * ==========================================
+             * PLAYER-OWNED COUNTRIES
+             * ==========================================
+             */
+
+            marketMessage +=
+              "🤝 PLAYER COUNTRIES\n\n";
+
+            if (playerCountries.length === 0) {
+              marketMessage +=
+                "No other players currently own countries.";
+            } else {
+              const pageSize = 8;
+
+              const pageCountries =
+                playerCountries.slice(
+                  0,
+                  pageSize
+                );
+
+              for (const country of pageCountries) {
+                const price =
+                  Number(country.current_price);
+
+                const income =
+                  Number(country.hourly_income);
+
+                const level =
+                  Number(country.upgrade_level);
+
+                const code =
+                  country.code
+                    ? `🌐 ${country.code}`
+                    : "🌍";
+
+                const ownerData = country.owner as
+                  | { name?: string }
+                  | { name?: string }[]
+                  | null;
+
+                const ownerName =
+                  Array.isArray(ownerData)
+                    ? ownerData[0]?.name
+                    : ownerData?.name;
+
+                marketMessage +=
+                  `${code} ${country.name}\n` +
+                  `👤 Owner: ${ownerName ?? "Unknown"}\n` +
+                  `💵 Value: $${price.toFixed(2)}\n` +
+                  `📈 Level: ${level}\n` +
+                  `💰 Income: $${income.toFixed(2)}/hour\n\n`;
+
+                buttons.push([
+                  {
+                    text: `💰 Make Offer — ${country.name}`,
+                    callback_data:
+                      `make_offer:${country.id}`,
+                  },
+                ]);
+              }
+            }
+
+            /*
+             * ==========================================
+             * SEND MARKET
+             * ==========================================
+             */
+
+            await telegramRequest(
+              "sendMessage",
+              {
+                chat_id: chatId,
+                text: marketMessage,
+                reply_markup: {
+                  inline_keyboard: buttons,
+                },
+              }
+            );
+
+          } catch (error) {
+            console.error(
+              "Market error:",
+              error
+            );
+
+            await sendMessage(
+              chatId,
+              "❌ Unable to load the market right now.",
+              mainMenu()
+            );
+          }
+
+          continue;
+        }
+
+        if (text === "📩 My Offers") {
+          try {
+            const result =
+              await getPlayerOffers(
+                telegramUserId
+              );
+
+            if (!result) {
+              await sendMessage(
+                chatId,
+                "❌ Your Telegram account is not linked to a game account.",
+                mainMenu()
+              );
+
+              continue;
+            }
+
+            const { offers } = result;
+
+            if (offers.length === 0) {
+              await sendMessage(
+                chatId,
+                "📩 My Offers\n\n" +
+                "You don't have any pending offers.",
+                mainMenu()
+              );
+
+              continue;
+            }
+
+            for (const offer of offers) {
+              const country = Array.isArray(
+                offer.countries
+              )
+                ? offer.countries[0]
+                : offer.countries;
+
+              const buyer = Array.isArray(
+                offer.buyer
+              )
+                ? offer.buyer[0]
+                : offer.buyer;
+
+              const price =
+                Number(offer.price);
+
+              const currentPrice =
+                Number(
+                  country?.current_price ?? 0
+                );
+
+              const countryName =
+                country?.name ?? "Unknown country";
+
+              const buyerName =
+                buyer?.name ?? "Unknown player";
+
+              const expiresAt =
+                offer.expires_at
+                  ? new Date(
+                    offer.expires_at
+                  ).toLocaleString(
+                    "en-GB",
+                    {
+                      timeZone: "Africa/Cairo",
+                    }
+                  )
+                  : "Unknown";
+
+              const message =
+                `📩 COUNTRY OFFER\n\n` +
+                `🌍 ${countryName}\n\n` +
+                `👤 Buyer: ${buyerName}\n` +
+                `💵 Offer: $${price.toFixed(2)}\n` +
+                `📊 Current value: $${currentPrice.toFixed(2)}\n\n` +
+                `⏰ Expires: ${expiresAt}\n\n` +
+                `Do you want to accept this offer?`;
+
+              await sendMessage(
+                chatId,
+                message,
+                mainMenu()
+              );
+
+              await telegramRequest(
+                "sendMessage",
+                {
+                  chat_id: chatId,
+                  text:
+                    `Offer for ${countryName}`,
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        {
+                          text: "✅ Accept Offer",
+                          callback_data:
+                            `accept_offer:${offer.id}`,
+                        },
+                        {
+                          text: "❌ Cancel Offer",
+                          callback_data:
+                            `cancel_offer:${offer.id}`,
+                        },
+                      ],
+                    ],
+                  },
+                }
+              );
+            }
+          } catch (error) {
+            console.error(
+              "My Offers error:",
+              error
+            );
+
+            await sendMessage(
+              chatId,
+              "❌ Unable to load your offers.",
+              mainMenu()
+            );
+          }
 
           continue;
         }
