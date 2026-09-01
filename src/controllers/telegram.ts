@@ -339,21 +339,6 @@ const pendingAdminBalanceAdjustments = new Map<
   PendingAdminBalanceAdjustment
 >();
 
-type PendingAdminCountryUpdate = {
-  countryId: string;
-  countryName: string;
-  currentPrice: number;
-  dailyIncome: number;
-  nextCurrentPrice?: number;
-  nextDailyIncome?: number;
-  reason?: string;
-  step: "current_price" | "daily_income" | "reason" | "confirm";
-};
-
-const pendingAdminCountryUpdates = new Map<
-  number,
-  PendingAdminCountryUpdate
->();
 
 type PendingAdminSettingsChange = {
   kind: "income_mode" | "market_enabled" | "offer_duration_minutes" | "min_price_percent" | "max_price_percent" | "game_active" | "starting_balance";
@@ -375,7 +360,6 @@ const pendingAdminStatusChanges = new Map<number, PendingAdminStatusChange>();
 
 function clearPendingAdminState(telegramUserId: number) {
   pendingAdminBalanceAdjustments.delete(telegramUserId);
-  pendingAdminCountryUpdates.delete(telegramUserId);
   pendingAdminSettingsChanges.delete(telegramUserId);
   pendingAdminSettingsInputs.delete(telegramUserId);
   pendingAdminStatusChanges.delete(telegramUserId);
@@ -1673,85 +1657,6 @@ async function startTelegramBot() {
                     callbackMessageId!,
                     "❌ Balance adjustment cancelled."
                   );
-                } else if (action === "country_confirm") {
-                  const pending = pendingAdminCountryUpdates.get(callbackTelegramUserId);
-
-                  if (!pending || pending.step !== "confirm") {
-                    pendingAdminCountryUpdates.delete(callbackTelegramUserId);
-                    await sendMessage(callbackChatId, "❌ No pending country update found.", await mainMenuForTelegramUser(callbackTelegramUserId));
-                    continue;
-                  }
-
-                  try {
-                    const adminUser = await findUserByTelegramId(callbackTelegramUserId);
-                    if (!adminUser?.id) {
-                      throw new Error("ADMIN_NOT_FOUND");
-                    }
-
-                    const result = await adminUpdateCountry(
-                      adminUser.id,
-                      pending.countryId,
-                      pending.nextCurrentPrice!,
-                      pending.nextDailyIncome!,
-                      pending.reason!
-                    );
-
-                    pendingAdminCountryUpdates.delete(callbackTelegramUserId);
-                    await sendMessage(
-                      callbackChatId,
-                      `✅ Country updated successfully.\n\n` +
-                        `🌍 ${pending.countryName}\n` +
-                        `💵 Current price: $${pending.nextCurrentPrice!.toFixed(2)}\n` +
-                        `💰 Daily income: $${pending.nextDailyIncome!.toFixed(2)}/day\n` +
-                        `Reason: ${pending.reason}\n\n${result ?? ""}`.trim(),
-                      await mainMenuForTelegramUser(callbackTelegramUserId)
-                    );
-                  } catch (error) {
-                    console.error("Admin country update execution error:", error);
-                    pendingAdminCountryUpdates.delete(callbackTelegramUserId);
-                    await sendMessage(
-                      callbackChatId,
-                      "❌ The country update failed. Please try again.",
-                      await mainMenuForTelegramUser(callbackTelegramUserId)
-                    );
-                  }
-                } else if (action === "country_cancel") {
-                  pendingAdminCountryUpdates.delete(callbackTelegramUserId);
-                  await sendMessage(
-                    callbackChatId,
-                    "❌ Country update cancelled.",
-                    await mainMenuForTelegramUser(callbackTelegramUserId)
-                  );
-                } else if (action === "country") {
-                  const countryId = parts.slice(2).join(":");
-                  const { data: country, error } = await supabase
-                    .from("countries")
-                    .select(
-                      "id,name,current_price,daily_income,upgrade_level,category"
-                    )
-                    .eq("id", countryId)
-                    .maybeSingle();
-
-                  if (error || !country) {
-                    await sendMessage(callbackChatId, "❌ Country not found.", await mainMenuForTelegramUser(callbackTelegramUserId));
-                    continue;
-                  }
-
-                  clearPendingAdminState(callbackTelegramUserId);
-                  pendingAdminCountryUpdates.set(callbackTelegramUserId, {
-                    countryId: country.id,
-                    countryName: country.name,
-                    currentPrice: Number(country.current_price ?? 0),
-                    dailyIncome: Number(country.daily_income ?? 0),
-                    step: "current_price",
-                  });
-
-                  await sendMessage(
-                    callbackChatId,
-                    `✏️ Edit Country\n\n🌍 ${country.name}\nCurrent price: $${Number(country.current_price ?? 0).toFixed(2)}\nDaily income: $${Number(country.daily_income ?? 0).toFixed(2)}/day\n\nEnter the new current price:\nSend /cancel to cancel.`,
-                    await mainMenuForTelegramUser(callbackTelegramUserId)
-                  );
-                } else if (action === "players" || action === "players_page") {
                   const page = Math.max(0, Number(parts[2] ?? 0) || 0);
                   const { players, hasPrevious, hasNext } = await getAdminPlayersPage(page);
 
@@ -1915,10 +1820,6 @@ async function startTelegramBot() {
                         `Category: ${c.category ?? "N/A"}\n` +
                         `Market: ${c.market_enabled === false ? "🔴 Disabled" : "🟢 Available"}\n\n`;
                       keyboard.push([
-                        {
-                          text: `✏️ Edit ${c.name}`,
-                          callback_data: `admin:country:${c.id}`,
-                        },
                         {
                           text: c.market_enabled === false ? "🟢 Enable Market" : "🔴 Disable Market",
                           callback_data: `admin:country_market_toggle:${c.id}:${c.market_enabled === false ? "on" : "off"}`,
@@ -3486,7 +3387,6 @@ async function startTelegramBot() {
 
         if (
           (pendingAdminBalanceAdjustments.has(telegramUserId) ||
-            pendingAdminCountryUpdates.has(telegramUserId) ||
             pendingAdminSettingsInputs.has(telegramUserId)) &&
           (text === "/cancel" || text === "❌ Cancel")
         ) {
@@ -3979,88 +3879,6 @@ async function startTelegramBot() {
           }
         }
 
-        if (pendingAdminCountryUpdates.has(telegramUserId)) {
-          const pending = pendingAdminCountryUpdates.get(telegramUserId)!;
-
-          if (pending.step === "current_price" || pending.step === "daily_income") {
-            const value = Number(text.trim());
-
-            if (!Number.isFinite(value) || value < 0) {
-              await sendMessage(
-                chatId,
-                "❌ Invalid value. Please enter a non-negative numeric value.",
-                await mainMenuForTelegramUser(telegramUserId)
-              );
-              continue;
-            }
-
-            if (pending.step === "current_price") {
-              pendingAdminCountryUpdates.set(telegramUserId, {
-                ...pending,
-                nextCurrentPrice: value,
-                step: "daily_income",
-              });
-
-              await sendMessage(
-                chatId,
-                `✏️ Edit Country\n\nCountry: ${pending.countryName}\nNew current price: $${value.toFixed(2)}\n\nEnter the new daily income:\nSend /cancel to cancel.`,
-                await mainMenuForTelegramUser(telegramUserId)
-              );
-            } else {
-              pendingAdminCountryUpdates.set(telegramUserId, {
-                ...pending,
-                nextDailyIncome: value,
-                step: "reason",
-              });
-
-              await sendMessage(
-                chatId,
-                `✏️ Edit Country\n\nCountry: ${pending.countryName}\nNew current price: $${pending.nextCurrentPrice!.toFixed(2)}\nNew daily income: $${value.toFixed(2)}/day\n\nEnter a reason for this update:\nSend /cancel to cancel.`,
-                await mainMenuForTelegramUser(telegramUserId)
-              );
-            }
-
-            continue;
-          }
-
-          if (pending.step === "reason") {
-            const reason = text.trim();
-
-            if (!reason) {
-              await sendMessage(
-                chatId,
-                "❌ Please provide a reason for the country update.",
-                await mainMenuForTelegramUser(telegramUserId)
-              );
-              continue;
-            }
-
-            const confirmedPending = {
-              ...pending,
-              reason,
-              step: "confirm" as const,
-            };
-            pendingAdminCountryUpdates.set(telegramUserId, confirmedPending);
-
-            await telegramRequest("sendMessage", {
-              chat_id: chatId,
-              text:
-                `✏️ Confirm Country Update\n\n` +
-                `Country: ${pending.countryName}\n` +
-                `Current price: $${pending.nextCurrentPrice!.toFixed(2)}\n` +
-                `Daily income: $${pending.nextDailyIncome!.toFixed(2)}/day\n` +
-                `Reason: ${reason}\n\n` +
-                "Do you want to proceed?",
-              reply_markup: {
-                inline_keyboard: [[
-                  { text: "✅ Confirm", callback_data: "admin:country_confirm" },
-                  { text: "❌ Cancel", callback_data: "admin:country_cancel" },
-                ]],
-              },
-            });
-            continue;
-          }
-        }
 
         if (pendingAdminBalanceAdjustments.has(telegramUserId)) {
           const pending = pendingAdminBalanceAdjustments.get(telegramUserId)!;
