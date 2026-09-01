@@ -203,8 +203,7 @@ function getMissedPayoutCount(
 }
 
 export async function collectPlayerIncome(playerId: string) {
-  const settings = await getGameSettings();
-  const incomeMode = settings.income_mode === "hourly" ? "hourly" : "daily";
+  const incomeMode = "hourly";
 
   const { data: countries, error } = await supabase
     .from("countries")
@@ -294,9 +293,9 @@ export async function collectPlayerIncome(playerId: string) {
       .from("transactions")
       .insert({
         user_id: playerId,
-        type: incomeMode === "hourly" ? "hourly_income" : "daily_income",
+        type: "hourly_income",
         amount: totalIncome,
-        description: incomeMode === "hourly" ? "Country hourly income" : "Country daily income",
+        description: "Country hourly income",
       });
 
     if (transactionError) {
@@ -576,7 +575,7 @@ export async function getDailyLeaderboard(
 export async function getGameSettings() {
   const [{ data: gameSettings, error: gameError }, { data: marketSettings, error: marketError }] =
     await Promise.all([
-      supabase.from("game_settings").select("income_mode,starting_balance,game_active").eq("id", 1).single(),
+      supabase.from("game_settings").select("starting_balance,game_active").eq("id", 1).single(),
       supabase.from("market_settings").select("market_enabled,offer_duration_minutes,min_price_percent,max_price_percent,max_country_level").eq("id", 1).single(),
     ]);
 
@@ -589,7 +588,6 @@ export async function getGameSettings() {
 export async function adminUpdateGameSettings(
   adminId: string,
   settings: {
-    incomeMode?: "daily" | "hourly";
     marketEnabled?: boolean;
     offerDurationMinutes?: number;
     minPricePercent?: number;
@@ -601,7 +599,6 @@ export async function adminUpdateGameSettings(
 ) {
   const { data, error } = await supabase.rpc("admin_update_game_settings", {
     p_admin_id: adminId,
-    p_income_mode: settings.incomeMode ?? null,
     p_market_enabled: settings.marketEnabled ?? null,
     p_offer_duration_minutes: settings.offerDurationMinutes ?? null,
     p_min_price_percent: settings.minPricePercent ?? null,

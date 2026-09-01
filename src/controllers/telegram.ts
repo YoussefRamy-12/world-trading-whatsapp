@@ -341,7 +341,7 @@ const pendingAdminBalanceAdjustments = new Map<
 
 
 type PendingAdminSettingsChange = {
-  kind: "income_mode" | "market_enabled" | "offer_duration_minutes" | "min_price_percent" | "max_price_percent" | "game_active" | "starting_balance";
+  kind: "market_enabled" | "offer_duration_minutes" | "min_price_percent" | "max_price_percent" | "game_active" | "starting_balance";
   value: string | boolean | number;
   description: string;
 };
@@ -1439,19 +1439,17 @@ async function startTelegramBot() {
                   const admin = await findUserByTelegramId(callbackTelegramUserId);
                   if (!admin?.id) throw new Error("ADMIN_NOT_FOUND");
 
-                  const settings = pending.kind === "income_mode"
-                    ? { incomeMode: pending.value as "daily" | "hourly" }
-                    : pending.kind === "market_enabled"
-                      ? { marketEnabled: pending.value as boolean }
-                      : pending.kind === "offer_duration_minutes"
-                        ? { offerDurationMinutes: pending.value as number }
-                        : pending.kind === "min_price_percent"
-                          ? { minPricePercent: pending.value as number }
-                          : pending.kind === "max_price_percent"
-                            ? { maxPricePercent: pending.value as number }
-                            : pending.kind === "game_active"
-                              ? { gameActive: pending.value as boolean }
-                              : { startingBalance: pending.value as number };
+                  const settings = pending.kind === "market_enabled"
+                   ? { marketEnabled: pending.value as boolean }
+                   : pending.kind === "offer_duration_minutes"
+                     ? { offerDurationMinutes: pending.value as number }
+                     : pending.kind === "min_price_percent"
+                       ? { minPricePercent: pending.value as number }
+                       : pending.kind === "max_price_percent"
+                         ? { maxPricePercent: pending.value as number }
+                         : pending.kind === "game_active"
+                           ? { gameActive: pending.value as boolean }
+                           : { startingBalance: pending.value as number };
                   await adminUpdateGameSettings(admin.id, settings);
                   pendingAdminSettingsChanges.delete(callbackTelegramUserId);
                   await editMessage(callbackChatId, callbackMessageId!, `✅ ${pending.description} updated.`);
@@ -1462,34 +1460,34 @@ async function startTelegramBot() {
                   clearPendingAdminState(callbackTelegramUserId);
                   pendingAdminSettingsInputs.set(callbackTelegramUserId, "starting_balance");
                   await sendMessage(callbackChatId, "💵 Enter the new starting balance (must be zero or greater). Send /cancel to cancel.", await mainMenuForTelegramUser(callbackTelegramUserId));
-                } else if (action === "settings_mode" || action === "settings_market" || action === "settings_duration" || action === "settings_min_price" || action === "settings_max_price" || action === "settings_game" || action === "settings_starting_balance") {
+                } else if (action === "settings_market" || action === "settings_duration" || action === "settings_min_price" || action === "settings_max_price" || action === "settings_game" || action === "settings_starting_balance") {
                   const value = parts.slice(2).join(":");
-                  const parsedValue = action === "settings_market" || action === "settings_game" ? value === "on" : action === "settings_mode" ? value : Number(value);
-                  if (action === "settings_duration" && (!Number.isInteger(parsedValue) || parsedValue <= 0 || parsedValue > 10080)) {
+                  const isBooleanAction = action === "settings_market" || action === "settings_game";
+                  const parsedValue = isBooleanAction ? value === "on" : Number(value);
+                  const numericValue = isBooleanAction ? 0 : Number(value);
+                  if (action === "settings_duration" && (!Number.isInteger(numericValue) || numericValue <= 0 || numericValue > 10080)) {
                     await sendMessage(callbackChatId, "❌ Invalid offer duration.", await mainMenuForTelegramUser(callbackTelegramUserId));
                     continue;
                   }
-                  if ((action === "settings_min_price" || action === "settings_max_price") && (!Number.isFinite(parsedValue) || parsedValue <= 0 || parsedValue >= 3)) {
+                  if ((action === "settings_min_price" || action === "settings_max_price") && (!Number.isFinite(numericValue) || numericValue <= 0 || numericValue >= 3)) {
                     await sendMessage(callbackChatId, "❌ Invalid price percentage.", await mainMenuForTelegramUser(callbackTelegramUserId));
                     continue;
                   }
-                  if (action === "settings_starting_balance" && (!Number.isFinite(parsedValue) || parsedValue < 0 || parsedValue > 1000000000)) {
+                  if (action === "settings_starting_balance" && (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > 1000000000)) {
                     await sendMessage(callbackChatId, "❌ Invalid starting balance.", await mainMenuForTelegramUser(callbackTelegramUserId));
                     continue;
                   }
-                  const description = action === "settings_mode"
-                    ? `Income mode: ${String(parsedValue).toUpperCase()}`
-                    : action === "settings_market"
-                      ? `Market: ${parsedValue ? "ON" : "OFF"}`
-                      : action === "settings_duration"
-                        ? `Offer duration: ${parsedValue} minutes`
-                        : action === "settings_starting_balance"
-                          ? `Starting balance: $${Number(parsedValue).toFixed(2)}`
-                          : action === "settings_game"
-                            ? `Game: ${parsedValue ? "ACTIVE" : "INACTIVE"}`
-                            : `${action === "settings_min_price" ? "Minimum" : "Maximum"} price: ${(Number(parsedValue) * 100).toFixed(0)}%`;
+                  const description = action === "settings_market"
+                    ? `Market: ${parsedValue ? "ON" : "OFF"}`
+                    : action === "settings_duration"
+                      ? `Offer duration: ${parsedValue} minutes`
+                      : action === "settings_starting_balance"
+                        ? `Starting balance: $${Number(parsedValue).toFixed(2)}`
+                        : action === "settings_game"
+                          ? `Game: ${parsedValue ? "ACTIVE" : "INACTIVE"}`
+                          : `${action === "settings_min_price" ? "Minimum" : "Maximum"} price: ${(Number(parsedValue) * 100).toFixed(0)}%`;
                   pendingAdminSettingsChanges.set(callbackTelegramUserId, {
-                    kind: action === "settings_mode" ? "income_mode" : action === "settings_market" ? "market_enabled" : action === "settings_duration" ? "offer_duration_minutes" : action === "settings_min_price" ? "min_price_percent" : action === "settings_max_price" ? "max_price_percent" : action === "settings_game" ? "game_active" : "starting_balance",
+                    kind: action === "settings_market" ? "market_enabled" : action === "settings_duration" ? "offer_duration_minutes" : action === "settings_min_price" ? "min_price_percent" : action === "settings_max_price" ? "max_price_percent" : action === "settings_game" ? "game_active" : "starting_balance",
                     value: parsedValue,
                     description,
                   });
@@ -1507,8 +1505,8 @@ async function startTelegramBot() {
                   const settings = await getGameSettings();
                   const isMarket = action === "market" || action === "market_settings";
                   const text = isMarket
-                    ? `🌐 Market Settings\n\nMarket: ${settings.market_enabled ? "🟢 ON" : "🔴 OFF"}\nIncome: ${String(settings.income_mode ?? "daily").toUpperCase()}\nOffer duration: ${settings.offer_duration_minutes} minutes\nMinimum price: ${(Number(settings.min_price_percent) * 100).toFixed(0)}%\nMaximum price: ${(Number(settings.max_price_percent) * 100).toFixed(0)}%`
-                    : `⚙️ Game Settings\n\nGame: ${settings.game_active ? "🟢 ACTIVE" : "🔴 INACTIVE"}\nIncome mode: ${String(settings.income_mode ?? "daily").toUpperCase()}\nStarting balance: $${Number(settings.starting_balance ?? 0).toFixed(2)}`;
+                    ? `🌐 Market Settings\n\nMarket: ${settings.market_enabled ? "🟢 ON" : "🔴 OFF"}\nOffer duration: ${settings.offer_duration_minutes} minutes\nMinimum price: ${(Number(settings.min_price_percent) * 100).toFixed(0)}%\nMaximum price: ${(Number(settings.max_price_percent) * 100).toFixed(0)}%`
+                    : `⚙️ Game Settings\n\nGame: ${settings.game_active ? "🟢 ACTIVE" : "🔴 INACTIVE"}\nStarting balance: $${Number(settings.starting_balance ?? 0).toFixed(2)}`;
                   const keyboard: unknown[][] = isMarket
                     ? [
                         [{ text: settings.market_enabled ? "🔴 Turn Market OFF" : "🟢 Turn Market ON", callback_data: `admin:settings_market:${settings.market_enabled ? "off" : "on"}` }],
@@ -1518,7 +1516,6 @@ async function startTelegramBot() {
                       ]
                     : [
                       [{ text: settings.game_active ? "🔴 Turn Game OFF" : "🟢 Turn Game ON", callback_data: `admin:settings_game:${settings.game_active ? "off" : "on"}` }],
-                        [{ text: "📅 Daily", callback_data: "admin:settings_mode:daily" }, { text: "⏰ Hourly", callback_data: "admin:settings_mode:hourly" }],
                       [{ text: "💵 Starting Balance", callback_data: "admin:settings_starting_balance" }],
                         [{ text: "🔙 Back", callback_data: "admin:settings_back" }],
                       ];
