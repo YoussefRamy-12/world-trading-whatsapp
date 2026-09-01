@@ -94,6 +94,18 @@ function normalizeCountryCategory(category?: string | null) {
   return String(category ?? "silver").trim().toLowerCase();
 }
 
+async function assertPlayerActive(playerId: string) {
+  const { data, error } = await supabase
+    .from("users")
+    .select("is_active")
+    .eq("id", playerId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw new Error("PLAYER_NOT_FOUND");
+  if (data.is_active === false) throw new Error("PLAYER_DISABLED");
+}
+
 export function getCountryDailyIncome(country: {
   base_daily_income?: number | string | null;
   daily_income?: number | string | null;
@@ -129,12 +141,13 @@ export function getCountryDailyIncome(country: {
   return Math.max(0, baseIncome + completedBuildingIncome);
 }
 
-function getCairoDateKey(date: Date) {
+function getCairoPeriodKey(date: Date, mode: "daily" | "hourly") {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Africa/Cairo",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    ...(mode === "hourly" ? { hour: "2-digit", hourCycle: "h23" as const } : {}),
   }).formatToParts(date);
 
   const values: Record<string, string> = {};
@@ -145,32 +158,54 @@ function getCairoDateKey(date: Date) {
     }
   }
 
-  return `${values.year}-${values.month}-${values.day}`;
+  return mode === "hourly"
+    ? `${values.year}-${values.month}-${values.day}-${values.hour}`
+    : `${values.year}-${values.month}-${values.day}`;
 }
 
-function getMissedDailyPayoutCount(
+function getMissedPayoutCount(
   lastPaidAt: Date | null,
-  now: Date
+  now: Date,
+  mode: "daily" | "hourly"
 ) {
   if (!lastPaidAt) {
     return 0;
   }
 
-  const lastPaidDate = new Date(getCairoDateKey(lastPaidAt));
-  const currentDate = new Date(getCairoDateKey(now));
+  const lastPaidKey = getCairoPeriodKey(lastPaidAt, mode);
+  const currentKey = getCairoPeriodKey(now, mode);
+  const toComparableDate = (key: string) => {
+    if (mode === "hourly") {
+      const [year, month, day, hour] = key.split("-");
+      return new Date(`${year}-${month}-${day}T${hour}:00:00Z`);
+    }
 
-  const millisecondsPerDay = 1000 * 60 * 60 * 24;
+    return new Date(`${key}T00:00:00Z`);
+  };
+  const lastPaidDate = new Date(
+    toComparableDate(lastPaidKey)
+  );
+  const currentDate = new Date(
+    toComparableDate(currentKey)
+  );
+
+  const millisecondsPerPeriod = mode === "hourly"
+    ? 1000 * 60 * 60
+    : 1000 * 60 * 60 * 24;
 
   return Math.max(
     0,
     Math.floor(
       (currentDate.getTime() - lastPaidDate.getTime()) /
-        millisecondsPerDay
+        millisecondsPerPeriod
     )
   );
 }
 
 export async function collectPlayerIncome(playerId: string) {
+  const settings = await getGameSettings();
+  const incomeMode = settings.income_mode === "hourly" ? "hourly" : "daily";
+
   const { data: countries, error } = await supabase
     .from("countries")
     .select("*")
@@ -206,19 +241,19 @@ export async function collectPlayerIncome(playerId: string) {
       ? new Date(country.daily_income_last_paid_at)
       : new Date(country.owned_since);
 
-    const missedDays = getMissedDailyPayoutCount(lastPaidAt, now);
+    const missedPeriods = getMissedPayoutCount(lastPaidAt, now, incomeMode);
 
-    if (missedDays <= 0) {
+    if (missedPeriods <= 0) {
       continue;
     }
 
-    const income = dailyIncome * missedDays;
+    const income = dailyIncome * missedPeriods;
 
     totalIncome += income;
 
     incomeDetails.push({
       country: country.name,
-      days: missedDays,
+      periods: missedPeriods,
       income,
     });
 
@@ -259,9 +294,9 @@ export async function collectPlayerIncome(playerId: string) {
       .from("transactions")
       .insert({
         user_id: playerId,
-        type: "daily_income",
+        type: incomeMode === "hourly" ? "hourly_income" : "daily_income",
         amount: totalIncome,
-        description: "Country daily income",
+        description: incomeMode === "hourly" ? "Country hourly income" : "Country daily income",
       });
 
     if (transactionError) {
@@ -279,7 +314,7 @@ async function getCountryById(countryId: string) {
   const { data, error } = await supabase
     .from("countries")
     .select(
-      "id,name,code,base_price,current_price,daily_income,owner_id,owned_since,upgrade_level,category"
+      "id,name,code,base_price,current_price,daily_income,owner_id,owned_since,upgrade_level,category,market_enabled"
     )
     .eq("id", countryId)
     .maybeSingle();
@@ -322,6 +357,12 @@ export async function buyCountry(
   playerId: string,
   countryId: string
 ) {
+  await assertPlayerActive(playerId);
+  const settings = await getGameSettings();
+  if (settings.market_enabled === false) {
+    throw new Error("MARKET_CLOSED");
+  }
+
   const country = await getCountryById(countryId);
 
   if (!country) {
@@ -330,6 +371,10 @@ export async function buyCountry(
 
   if (country.owner_id === playerId) {
     throw new Error("COUNTRY_ALREADY_OWNED");
+  }
+
+  if (country.market_enabled === false) {
+    throw new Error("COUNTRY_MARKET_DISABLED");
   }
 
   const { data, error } = await supabase.rpc(
@@ -376,6 +421,12 @@ export async function createCountryOffer(
   countryId: string,
   price: number
 ) {
+  await assertPlayerActive(buyerId);
+  const settings = await getGameSettings();
+  if (settings.market_enabled === false) {
+    throw new Error("MARKET_CLOSED");
+  }
+
   const country = await getCountryById(countryId);
 
   if (!country) {
@@ -390,6 +441,10 @@ export async function createCountryOffer(
 
   if (level === 0) {
     throw new Error("LEVEL_0_COUNTRY_NOT_FOR_SALE");
+  }
+
+  if (country.market_enabled === false) {
+    throw new Error("COUNTRY_MARKET_DISABLED");
   }
 
   const { data, error } = await supabase.rpc(
@@ -469,6 +524,7 @@ export async function upgradeCountry(
   playerId: string,
   countryId: string
 ) {
+  await assertPlayerActive(playerId);
   const { data, error } = await supabase.rpc(
     "upgrade_country",
     {
@@ -514,6 +570,78 @@ export async function getDailyLeaderboard(
     throw error;
   }
 
+  return data;
+}
+
+export async function getGameSettings() {
+  const [{ data: gameSettings, error: gameError }, { data: marketSettings, error: marketError }] =
+    await Promise.all([
+      supabase.from("game_settings").select("income_mode,starting_balance,game_active").eq("id", 1).single(),
+      supabase.from("market_settings").select("market_enabled,offer_duration_minutes,min_price_percent,max_price_percent,max_country_level").eq("id", 1).single(),
+    ]);
+
+  if (gameError) throw gameError;
+  if (marketError) throw marketError;
+
+  return { ...gameSettings, ...marketSettings };
+}
+
+export async function adminUpdateGameSettings(
+  adminId: string,
+  settings: {
+    incomeMode?: "daily" | "hourly";
+    marketEnabled?: boolean;
+    offerDurationMinutes?: number;
+    minPricePercent?: number;
+    maxPricePercent?: number;
+    gameActive?: boolean;
+    startingBalance?: number;
+    maxCountryLevel?: number;
+  }
+) {
+  const { data, error } = await supabase.rpc("admin_update_game_settings", {
+    p_admin_id: adminId,
+    p_income_mode: settings.incomeMode ?? null,
+    p_market_enabled: settings.marketEnabled ?? null,
+    p_offer_duration_minutes: settings.offerDurationMinutes ?? null,
+    p_min_price_percent: settings.minPricePercent ?? null,
+    p_max_price_percent: settings.maxPricePercent ?? null,
+    p_game_active: settings.gameActive ?? null,
+    p_starting_balance: settings.startingBalance ?? null,
+    p_max_country_level: settings.maxCountryLevel ?? null,
+  });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function adminSetCountryMarketAvailability(
+  adminId: string,
+  countryId: string,
+  marketEnabled: boolean
+) {
+  const { data, error } = await supabase.rpc("admin_set_country_market_availability", {
+    p_admin_id: adminId,
+    p_country_id: countryId,
+    p_market_enabled: marketEnabled,
+  });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function adminSetPlayerActive(
+  adminId: string,
+  playerId: string,
+  isActive: boolean
+) {
+  const { data, error } = await supabase.rpc("admin_set_player_active", {
+    p_admin_id: adminId,
+    p_player_id: playerId,
+    p_is_active: isActive,
+  });
+
+  if (error) throw error;
   return data;
 }
 

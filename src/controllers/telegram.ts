@@ -4,10 +4,17 @@ import {
   sellCountry,
   collectPlayerIncome,
   getLeaderboard,
+  getDailyLeaderboard,
   createCountryOffer,
   acceptCountryOffer,
   cancelCountryOffer,
   upgradeCountry,
+  adminAdjustBalance,
+  adminUpdateCountry,
+  getGameSettings,
+  adminUpdateGameSettings,
+  adminSetCountryMarketAvailability,
+  adminSetPlayerActive,
 } from "./game.js";
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -119,6 +126,167 @@ function mainMenu() {
   ];
 }
 
+// Check whether a Telegram user is an admin by re-querying the database.
+async function isTelegramUserAdmin(telegramUserId?: number) {
+  if (!telegramUserId) return false;
+
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("telegram_user_id", telegramUserId)
+      .maybeSingle();
+
+    if (error || !data) return false;
+
+    return Boolean(data.is_admin);
+  } catch (err) {
+    console.error("Failed to check admin status:", err);
+    return false;
+  }
+}
+
+// Return the main keyboard, adding an Admin Panel button when the
+// provided Telegram user is an admin. This avoids trusting the
+// client's keyboard and allows server-side checks for admin actions.
+async function mainMenuForTelegramUser(telegramUserId?: number) {
+  const base = mainMenu();
+
+  const isAdmin = await isTelegramUserAdmin(telegramUserId);
+
+  if (isAdmin) {
+    // Add an Admin Panel button as a separate row.
+    return [...base, [{ text: "⚙️ Admin Panel" }]];
+  }
+
+  return base;
+}
+
+function adminPanelKeyboard(): unknown[][] {
+  return [
+    [
+      {
+        text: "👥 Players",
+        callback_data: "admin:players",
+      },
+    ],
+    [
+      {
+        text: "🌍 Countries",
+        callback_data: "admin:countries",
+      },
+      {
+        text: "🌐 Market Settings",
+        callback_data: "admin:market",
+      },
+    ],
+    [
+      {
+        text: "📊 Leaderboard",
+        callback_data: "admin:leaderboard",
+      },
+      {
+        text: "⚙️ Game Settings",
+        callback_data: "admin:game_settings",
+      },
+    ],
+    [
+      {
+        text: "🔙 Back",
+        callback_data: "admin:back",
+      },
+    ],
+  ];
+}
+
+function formatAdminPlayerLabel(player: {
+  name?: string | null;
+  telegram_username?: string | null;
+  telegram_user_id?: number | string | null;
+  whatsapp_number?: string | null;
+}) {
+  const name = player.name?.trim() || "Unknown Player";
+  const telegram = player.telegram_username
+    ? `@${player.telegram_username}`
+    : player.telegram_user_id !== null && player.telegram_user_id !== undefined
+      ? `TG:${player.telegram_user_id}`
+      : "TG:unlinked";
+
+  const whatsapp = player.whatsapp_number
+    ? (() => {
+        const digits = String(player.whatsapp_number).replace(/\D/g, "");
+
+        if (digits.length <= 4) {
+          return `WA:••${digits.slice(-2)}`;
+        }
+
+        return `WA:${digits.slice(0, 2)}******${digits.slice(-2)}`;
+      })()
+    : "WA:unlinked";
+
+  return `${name} • ${telegram} • ${whatsapp}`;
+}
+
+async function getAdminPlayersPage(page = 0, pageSize = 8) {
+  const safePage = Math.max(0, page);
+  const from = safePage * pageSize;
+
+  const { data, error } = await supabase
+    .from("users")
+    .select(
+      "id,name,telegram_user_id,telegram_username,whatsapp_number,balance,reserved_balance",
+      { count: "exact" }
+    )
+    .order("id", { ascending: false })
+    .range(from, from + pageSize - 1);
+
+  if (error) {
+    throw new Error(`Players lookup failed: ${error.message}`);
+  }
+
+  const players = data ?? [];
+
+  return {
+    players,
+    page: safePage,
+    hasPrevious: safePage > 0,
+    hasNext: players.length === pageSize,
+  };
+}
+
+async function getAdminPlayerDetails(playerId: string) {
+  const { data: player, error } = await supabase
+    .from("users")
+    .select(
+      "id,name,telegram_user_id,telegram_username,whatsapp_number,balance,reserved_balance,is_active"
+    )
+    .eq("id", playerId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Player lookup failed: ${error.message}`);
+  }
+
+  if (!player) {
+    return null;
+  }
+
+  const { data: countries, error: countriesError } = await supabase
+    .from("countries")
+    .select("id,name,code,current_price,upgrade_level,category")
+    .eq("owner_id", player.id)
+    .order("name");
+
+  if (countriesError) {
+    throw new Error(`Player countries lookup failed: ${countriesError.message}`);
+  }
+
+  return {
+    player,
+    countries: countries ?? [],
+  };
+}
+
 async function getUpdates(offset?: number) {
   return telegramRequest(
     "getUpdates",
@@ -156,6 +324,62 @@ const pendingOfferCountry =
 
 const pendingOfferPrice =
   new Map<number, number>();
+
+type PendingAdminBalanceAdjustment = {
+  targetUserId: string;
+  playerName: string;
+  currentBalance: number;
+  amount?: number;
+  reason?: string;
+  step: "amount" | "reason" | "confirm";
+};
+
+const pendingAdminBalanceAdjustments = new Map<
+  number,
+  PendingAdminBalanceAdjustment
+>();
+
+type PendingAdminCountryUpdate = {
+  countryId: string;
+  countryName: string;
+  currentPrice: number;
+  dailyIncome: number;
+  nextCurrentPrice?: number;
+  nextDailyIncome?: number;
+  reason?: string;
+  step: "current_price" | "daily_income" | "reason" | "confirm";
+};
+
+const pendingAdminCountryUpdates = new Map<
+  number,
+  PendingAdminCountryUpdate
+>();
+
+type PendingAdminSettingsChange = {
+  kind: "income_mode" | "market_enabled" | "offer_duration_minutes" | "min_price_percent" | "max_price_percent" | "game_active" | "starting_balance";
+  value: string | boolean | number;
+  description: string;
+};
+
+const pendingAdminSettingsChanges = new Map<number, PendingAdminSettingsChange>();
+const pendingAdminSettingsInputs = new Map<number, "starting_balance">();
+
+type PendingAdminStatusChange = {
+  kind: "country_market" | "player_active";
+  id: string;
+  enabled: boolean;
+  description: string;
+};
+
+const pendingAdminStatusChanges = new Map<number, PendingAdminStatusChange>();
+
+function clearPendingAdminState(telegramUserId: number) {
+  pendingAdminBalanceAdjustments.delete(telegramUserId);
+  pendingAdminCountryUpdates.delete(telegramUserId);
+  pendingAdminSettingsChanges.delete(telegramUserId);
+  pendingAdminSettingsInputs.delete(telegramUserId);
+  pendingAdminStatusChanges.delete(telegramUserId);
+}
 
 const COUNTRY_BUILDING_CONFIG = {
   silver: {
@@ -314,12 +538,27 @@ async function getPlayerCountries(
 }
 
 async function getMarketCountries() {
+  const { data: marketSettings, error: settingsError } = await supabase
+    .from("market_settings")
+    .select("market_enabled")
+    .eq("id", 1)
+    .single();
+
+  if (settingsError) {
+    throw new Error(`Market settings lookup failed: ${settingsError.message}`);
+  }
+
+  if (marketSettings.market_enabled === false) {
+    return [];
+  }
+
   const { data, error } = await supabase
     .from("countries")
     .select(
       "id,name,code,current_price,daily_income,upgrade_level,category,base_price"
     )
     .is("owner_id", null)
+    .eq("market_enabled", true)
     .order("name");
 
   if (error) {
@@ -1001,6 +1240,15 @@ function getUserFriendlyGameError(error: unknown): string {
     case 'PLAYER_NOT_FOUND':
       return '❌ Your player account could not be found.';
 
+    case 'MARKET_CLOSED':
+      return '🔴 The market is currently closed by the administrator.';
+
+    case 'COUNTRY_MARKET_DISABLED':
+      return '🔴 This country is currently unavailable in the market.';
+
+    case 'PLAYER_DISABLED':
+      return '🔴 Your player account is currently disabled.';
+
     case 'OFFER_NOT_FOUND':
       return '❌ This offer no longer exists.';
 
@@ -1134,6 +1382,604 @@ async function startTelegramBot() {
           const callbackTelegramUserId =
             callbackQuery.from.id;
 
+          // Admin callbacks are prefixed with "admin:". Re-verify admin
+          // status for every admin callback to avoid trusting client-side
+          // button visibility.
+          if (callbackData?.startsWith("admin:")) {
+            const parts = callbackData.split(":");
+            const action = parts[1] ?? "";
+
+            // Re-query the database for admin rights
+            const isAdmin = await isTelegramUserAdmin(
+              callbackTelegramUserId
+            );
+
+            if (!isAdmin) {
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Unauthorized."
+              );
+
+              if (callbackChatId !== undefined) {
+                await sendMessage(
+                  callbackChatId,
+                  "❌ You are not authorized to perform this action.",
+                  await mainMenuForTelegramUser(
+                    callbackTelegramUserId
+                  )
+                );
+              }
+
+              continue;
+            }
+
+            // Authorized admin — handle actions
+            await answerCallbackQuery(
+              callbackQuery.id
+            );
+
+            if (callbackChatId !== undefined) {
+              try {
+                if (action === "status_confirm") {
+                  const pending = pendingAdminStatusChanges.get(callbackTelegramUserId);
+                  if (!pending) {
+                    await sendMessage(callbackChatId, "❌ No pending change found.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+                  const admin = await findUserByTelegramId(callbackTelegramUserId);
+                  if (!admin?.id) throw new Error("ADMIN_NOT_FOUND");
+                  if (pending.kind === "country_market") {
+                    await adminSetCountryMarketAvailability(admin.id, pending.id, pending.enabled);
+                  } else {
+                    await adminSetPlayerActive(admin.id, pending.id, pending.enabled);
+                  }
+                  pendingAdminStatusChanges.delete(callbackTelegramUserId);
+                  await editMessage(callbackChatId, callbackMessageId!, `✅ ${pending.description} updated.`);
+                } else if (action === "status_cancel") {
+                  pendingAdminStatusChanges.delete(callbackTelegramUserId);
+                  await editMessage(callbackChatId, callbackMessageId!, "❌ Change cancelled.");
+                } else if (action === "settings_confirm") {
+                  const pending = pendingAdminSettingsChanges.get(callbackTelegramUserId);
+                  if (!pending) {
+                    await sendMessage(callbackChatId, "❌ No pending settings change found.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+
+                  const admin = await findUserByTelegramId(callbackTelegramUserId);
+                  if (!admin?.id) throw new Error("ADMIN_NOT_FOUND");
+
+                  const settings = pending.kind === "income_mode"
+                    ? { incomeMode: pending.value as "daily" | "hourly" }
+                    : pending.kind === "market_enabled"
+                      ? { marketEnabled: pending.value as boolean }
+                      : pending.kind === "offer_duration_minutes"
+                        ? { offerDurationMinutes: pending.value as number }
+                        : pending.kind === "min_price_percent"
+                          ? { minPricePercent: pending.value as number }
+                          : pending.kind === "max_price_percent"
+                            ? { maxPricePercent: pending.value as number }
+                            : pending.kind === "game_active"
+                              ? { gameActive: pending.value as boolean }
+                              : { startingBalance: pending.value as number };
+                  await adminUpdateGameSettings(admin.id, settings);
+                  pendingAdminSettingsChanges.delete(callbackTelegramUserId);
+                  await editMessage(callbackChatId, callbackMessageId!, `✅ ${pending.description} updated.`);
+                } else if (action === "settings_cancel") {
+                  pendingAdminSettingsChanges.delete(callbackTelegramUserId);
+                  await editMessage(callbackChatId, callbackMessageId!, "❌ Settings change cancelled.");
+                } else if (action === "settings_starting_balance") {
+                  clearPendingAdminState(callbackTelegramUserId);
+                  pendingAdminSettingsInputs.set(callbackTelegramUserId, "starting_balance");
+                  await sendMessage(callbackChatId, "💵 Enter the new starting balance (must be zero or greater). Send /cancel to cancel.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                } else if (action === "settings_mode" || action === "settings_market" || action === "settings_duration" || action === "settings_min_price" || action === "settings_max_price" || action === "settings_game" || action === "settings_starting_balance") {
+                  const value = parts.slice(2).join(":");
+                  const parsedValue = action === "settings_market" || action === "settings_game" ? value === "on" : action === "settings_mode" ? value : Number(value);
+                  if (action === "settings_duration" && (!Number.isInteger(parsedValue) || parsedValue <= 0 || parsedValue > 10080)) {
+                    await sendMessage(callbackChatId, "❌ Invalid offer duration.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+                  if ((action === "settings_min_price" || action === "settings_max_price") && (!Number.isFinite(parsedValue) || parsedValue <= 0 || parsedValue >= 3)) {
+                    await sendMessage(callbackChatId, "❌ Invalid price percentage.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+                  if (action === "settings_starting_balance" && (!Number.isFinite(parsedValue) || parsedValue < 0 || parsedValue > 1000000000)) {
+                    await sendMessage(callbackChatId, "❌ Invalid starting balance.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+                  const description = action === "settings_mode"
+                    ? `Income mode: ${String(parsedValue).toUpperCase()}`
+                    : action === "settings_market"
+                      ? `Market: ${parsedValue ? "ON" : "OFF"}`
+                      : action === "settings_duration"
+                        ? `Offer duration: ${parsedValue} minutes`
+                        : action === "settings_starting_balance"
+                          ? `Starting balance: $${Number(parsedValue).toFixed(2)}`
+                          : action === "settings_game"
+                            ? `Game: ${parsedValue ? "ACTIVE" : "INACTIVE"}`
+                            : `${action === "settings_min_price" ? "Minimum" : "Maximum"} price: ${(Number(parsedValue) * 100).toFixed(0)}%`;
+                  pendingAdminSettingsChanges.set(callbackTelegramUserId, {
+                    kind: action === "settings_mode" ? "income_mode" : action === "settings_market" ? "market_enabled" : action === "settings_duration" ? "offer_duration_minutes" : action === "settings_min_price" ? "min_price_percent" : action === "settings_max_price" ? "max_price_percent" : action === "settings_game" ? "game_active" : "starting_balance",
+                    value: parsedValue,
+                    description,
+                  });
+                  await sendMessage(callbackChatId, `⚠️ Confirm change\n\n${description}?`, [[
+                    { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
+                    { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
+                  ]]);
+                } else if (action === "game_settings" || action === "market") {
+                  const settings = await getGameSettings();
+                  const isMarket = action === "market";
+                  const text = isMarket
+                    ? `🌐 Market Settings\n\nMarket: ${settings.market_enabled ? "🟢 ON" : "🔴 OFF"}\nIncome: ${String(settings.income_mode ?? "daily").toUpperCase()}\nOffer duration: ${settings.offer_duration_minutes} minutes\nMinimum price: ${(Number(settings.min_price_percent) * 100).toFixed(0)}%\nMaximum price: ${(Number(settings.max_price_percent) * 100).toFixed(0)}%`
+                    : `⚙️ Game Settings\n\nGame: ${settings.game_active ? "🟢 ACTIVE" : "🔴 INACTIVE"}\nIncome mode: ${String(settings.income_mode ?? "daily").toUpperCase()}\nStarting balance: $${Number(settings.starting_balance ?? 0).toFixed(2)}`;
+                  const keyboard: unknown[][] = isMarket
+                    ? [
+                        [{ text: settings.market_enabled ? "🔴 Turn Market OFF" : "🟢 Turn Market ON", callback_data: `admin:settings_market:${settings.market_enabled ? "off" : "on"}` }],
+                        [{ text: "⏱ 5 min", callback_data: "admin:settings_duration:5" }, { text: "⏱ 15 min", callback_data: "admin:settings_duration:15" }, { text: "⏱ 60 min", callback_data: "admin:settings_duration:60" }],
+                        [{ text: "📉 Min 80%", callback_data: "admin:settings_min_price:0.8" }, { text: "📈 Max 120%", callback_data: "admin:settings_max_price:1.2" }],
+                        [{ text: "🔙 Back", callback_data: "admin:back" }],
+                      ]
+                    : [
+                      [{ text: settings.game_active ? "🔴 Turn Game OFF" : "🟢 Turn Game ON", callback_data: `admin:settings_game:${settings.game_active ? "off" : "on"}` }],
+                        [{ text: "📅 Daily", callback_data: "admin:settings_mode:daily" }, { text: "⏰ Hourly", callback_data: "admin:settings_mode:hourly" }],
+                      [{ text: "💵 Starting Balance", callback_data: "admin:settings_starting_balance" }],
+                        [{ text: "🔙 Back", callback_data: "admin:back" }],
+                      ];
+                  await sendMessage(callbackChatId, text, keyboard);
+                } else if (action === "country_market_toggle") {
+                  const countryId = parts[2];
+                  if (!countryId) throw new Error("COUNTRY_NOT_FOUND");
+                  const enabled = parts[3] === "on";
+                  clearPendingAdminState(callbackTelegramUserId);
+                  pendingAdminStatusChanges.set(callbackTelegramUserId, {
+                    kind: "country_market",
+                    id: countryId,
+                    enabled,
+                    description: `Country market availability ${enabled ? "enabled" : "disabled"}`,
+                  });
+                  await sendMessage(callbackChatId, `⚠️ Confirm change\n\n${enabled ? "Enable" : "Disable"} this country in the market?`, [[
+                    { text: "✅ Confirm", callback_data: "admin:status_confirm" },
+                    { text: "❌ Cancel", callback_data: "admin:status_cancel" },
+                  ]]);
+                } else if (action === "player_active") {
+                  const playerId = parts[2];
+                  const enabled = parts[3] === "on";
+                  if (!playerId) throw new Error("PLAYER_NOT_FOUND");
+                  clearPendingAdminState(callbackTelegramUserId);
+                  pendingAdminStatusChanges.set(callbackTelegramUserId, {
+                    kind: "player_active",
+                    id: playerId,
+                    enabled,
+                    description: `Player ${enabled ? "enable" : "disable"}`,
+                  });
+                  await sendMessage(callbackChatId, `⚠️ Confirm change\n\n${enabled ? "Enable" : "Disable"} this player?`, [[
+                    { text: "✅ Confirm", callback_data: "admin:status_confirm" },
+                    { text: "❌ Cancel", callback_data: "admin:status_cancel" },
+                  ]]);
+                } else if (action === "confirm_balance_adjust") {
+                  const pending = pendingAdminBalanceAdjustments.get(callbackTelegramUserId);
+
+                  if (
+                    !pending ||
+                    typeof pending.amount !== "number" ||
+                    !Number.isFinite(pending.amount) ||
+                    !pending.reason?.trim()
+                  ) {
+                    await editMessage(
+                      callbackChatId,
+                      callbackMessageId!,
+                      "❌ This balance adjustment is no longer available."
+                    );
+                    continue;
+                  }
+
+                  try {
+                    const admin = await findUserByTelegramId(callbackTelegramUserId);
+                    if (!admin?.id) {
+                      throw new Error("ADMIN_NOT_FOUND");
+                    }
+
+                    const { data: targetUser, error: targetUserError } = await supabase
+                      .from("users")
+                      .select("id,name,balance")
+                      .eq("id", pending.targetUserId)
+                      .maybeSingle();
+
+                    if (targetUserError || !targetUser) {
+                      throw new Error("TARGET_PLAYER_NOT_FOUND");
+                    }
+
+                    const resultingBalance = Number(targetUser.balance ?? 0) + pending.amount;
+
+                    if (resultingBalance < 0) {
+                      pendingAdminBalanceAdjustments.delete(callbackTelegramUserId);
+                      await editMessage(
+                        callbackChatId,
+                        callbackMessageId!,
+                        `❌ Balance adjustment cancelled.\n\nThe resulting balance would be negative: $${resultingBalance.toFixed(2)}.`
+                      );
+                      continue;
+                    }
+
+                    const result = await adminAdjustBalance(
+                      admin.id,
+                      targetUser.id,
+                      pending.amount,
+                      pending.reason.trim()
+                    );
+
+                    pendingAdminBalanceAdjustments.delete(callbackTelegramUserId);
+
+                    await editMessage(
+                      callbackChatId,
+                      callbackMessageId!,
+                      `✅ Balance adjusted successfully.\n\n` +
+                        `Player: ${pending.playerName}\n` +
+                        `Amount: $${pending.amount.toFixed(2)}\n` +
+                        `New balance: $${resultingBalance.toFixed(2)}\n` +
+                        `Reason: ${pending.reason}\n\n${result ?? ""}`.trim()
+                    );
+                  } catch (error) {
+                    console.error("Admin balance confirmation error:", error);
+                    pendingAdminBalanceAdjustments.delete(callbackTelegramUserId);
+                    await editMessage(
+                      callbackChatId,
+                      callbackMessageId!,
+                      "❌ The balance update failed. Please try again."
+                    );
+                  }
+                } else if (action === "cancel_balance_adjust") {
+                  pendingAdminBalanceAdjustments.delete(callbackTelegramUserId);
+                  await editMessage(
+                    callbackChatId,
+                    callbackMessageId!,
+                    "❌ Balance adjustment cancelled."
+                  );
+                } else if (action === "country_confirm") {
+                  const pending = pendingAdminCountryUpdates.get(callbackTelegramUserId);
+
+                  if (!pending || pending.step !== "confirm") {
+                    pendingAdminCountryUpdates.delete(callbackTelegramUserId);
+                    await sendMessage(callbackChatId, "❌ No pending country update found.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+
+                  try {
+                    const adminUser = await findUserByTelegramId(callbackTelegramUserId);
+                    if (!adminUser?.id) {
+                      throw new Error("ADMIN_NOT_FOUND");
+                    }
+
+                    const result = await adminUpdateCountry(
+                      adminUser.id,
+                      pending.countryId,
+                      pending.nextCurrentPrice!,
+                      pending.nextDailyIncome!,
+                      pending.reason!
+                    );
+
+                    pendingAdminCountryUpdates.delete(callbackTelegramUserId);
+                    await sendMessage(
+                      callbackChatId,
+                      `✅ Country updated successfully.\n\n` +
+                        `🌍 ${pending.countryName}\n` +
+                        `💵 Current price: $${pending.nextCurrentPrice!.toFixed(2)}\n` +
+                        `💰 Daily income: $${pending.nextDailyIncome!.toFixed(2)}/day\n` +
+                        `Reason: ${pending.reason}\n\n${result ?? ""}`.trim(),
+                      await mainMenuForTelegramUser(callbackTelegramUserId)
+                    );
+                  } catch (error) {
+                    console.error("Admin country update execution error:", error);
+                    pendingAdminCountryUpdates.delete(callbackTelegramUserId);
+                    await sendMessage(
+                      callbackChatId,
+                      "❌ The country update failed. Please try again.",
+                      await mainMenuForTelegramUser(callbackTelegramUserId)
+                    );
+                  }
+                } else if (action === "country_cancel") {
+                  pendingAdminCountryUpdates.delete(callbackTelegramUserId);
+                  await sendMessage(
+                    callbackChatId,
+                    "❌ Country update cancelled.",
+                    await mainMenuForTelegramUser(callbackTelegramUserId)
+                  );
+                } else if (action === "country") {
+                  const countryId = parts.slice(2).join(":");
+                  const { data: country, error } = await supabase
+                    .from("countries")
+                    .select(
+                      "id,name,current_price,daily_income,upgrade_level,category"
+                    )
+                    .eq("id", countryId)
+                    .maybeSingle();
+
+                  if (error || !country) {
+                    await sendMessage(callbackChatId, "❌ Country not found.", await mainMenuForTelegramUser(callbackTelegramUserId));
+                    continue;
+                  }
+
+                  clearPendingAdminState(callbackTelegramUserId);
+                  pendingAdminCountryUpdates.set(callbackTelegramUserId, {
+                    countryId: country.id,
+                    countryName: country.name,
+                    currentPrice: Number(country.current_price ?? 0),
+                    dailyIncome: Number(country.daily_income ?? 0),
+                    step: "current_price",
+                  });
+
+                  await sendMessage(
+                    callbackChatId,
+                    `✏️ Edit Country\n\n🌍 ${country.name}\nCurrent price: $${Number(country.current_price ?? 0).toFixed(2)}\nDaily income: $${Number(country.daily_income ?? 0).toFixed(2)}/day\n\nEnter the new current price:\nSend /cancel to cancel.`,
+                    await mainMenuForTelegramUser(callbackTelegramUserId)
+                  );
+                } else if (action === "players" || action === "players_page") {
+                  const page = Math.max(0, Number(parts[2] ?? 0) || 0);
+                  const { players, hasPrevious, hasNext } = await getAdminPlayersPage(page);
+
+                  const listTitle = `👥 Players — Page ${page + 1}`;
+                  let msg = `${listTitle}\n\n`;
+
+                  if (!players.length) {
+                    msg += "No players found.";
+                  } else {
+                    for (const player of players) {
+                      const balance = Number(player.balance ?? 0);
+                      const reserved = Number(player.reserved_balance ?? 0);
+                      msg += `• ${player.name ?? "Unknown Player"}\n`;
+                      msg += `  ${formatAdminPlayerLabel(player)}\n`;
+                      msg += `  Balance: $${balance.toFixed(2)} | Reserved: $${reserved.toFixed(2)}\n\n`;
+                    }
+                  }
+
+                  const keyboard: unknown[][] = players.map((player) => [
+                    {
+                      text: `${player.name ?? "Unknown Player"} • $${Number(player.balance ?? 0).toFixed(2)}`,
+                      callback_data: `admin:player_details:${player.id}`,
+                    },
+                  ]);
+
+                  if (hasPrevious || hasNext) {
+                    keyboard.push([
+                      ...(hasPrevious
+                        ? [{ text: "⬅️ Prev", callback_data: `admin:players_page:${page - 1}` }]
+                        : []),
+                      ...(hasNext
+                        ? [{ text: "➡️ Next", callback_data: `admin:players_page:${page + 1}` }]
+                        : []),
+                    ]);
+                  }
+
+                  keyboard.push([
+                    { text: "🔙 Back", callback_data: "admin:back" },
+                  ]);
+
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text: msg,
+                    reply_markup: {
+                      inline_keyboard: keyboard,
+                    },
+                  });
+                } else if (action === "player_details") {
+                  const playerId = parts.slice(2).join(":");
+                  const adminPlayer = await getAdminPlayerDetails(playerId);
+
+                  if (!adminPlayer) {
+                    await telegramRequest("sendMessage", {
+                      chat_id: callbackChatId,
+                      text: "❌ Player not found.",
+                      reply_markup: {
+                        inline_keyboard: [[{ text: "👥 Players", callback_data: "admin:players" }]],
+                      },
+                    });
+                    continue;
+                  }
+
+                  const { player, countries } = adminPlayer;
+                  const balance = Number(player.balance ?? 0);
+                  const reserved = Number(player.reserved_balance ?? 0);
+
+                  let countryText = "No countries owned.";
+
+                  if (countries.length > 0) {
+                    countryText = countries
+                      .map((country) => {
+                        const value = Number(country.current_price ?? 0);
+                        const level = Number(country.upgrade_level ?? 0);
+                        return `• ${country.name} (${country.code ?? "N/A"}) — $${value.toFixed(2)} — Level ${level}`;
+                      })
+                      .join("\n");
+                  }
+
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text:
+                      `👤 ${player.name ?? "Unknown Player"}\n` +
+                      `Telegram: ${player.telegram_username ? `@${player.telegram_username}` : player.telegram_user_id ? `TG:${player.telegram_user_id}` : "Not linked"}\n` +
+                      `WhatsApp: ${player.whatsapp_number ? (() => { const digits = String(player.whatsapp_number).replace(/\D/g, ""); return digits.length <= 4 ? `••${digits.slice(-2)}` : `${digits.slice(0, 2)}******${digits.slice(-2)}`; })() : "Not linked"}\n` +
+                      `Balance: $${balance.toFixed(2)}\n` +
+                      `Reserved: $${reserved.toFixed(2)}\n\n` +
+                      `🏝 Owned Countries\n${countryText}`,
+                    reply_markup: {
+                      inline_keyboard: [
+                        [{ text: "💰 Adjust Balance", callback_data: `admin:adjust_balance_player:${player.id}` }],
+                        [{ text: player.is_active === false ? "🟢 Enable Player" : "🔴 Disable Player", callback_data: `admin:player_active:${player.id}:${player.is_active === false ? "on" : "off"}` }],
+                        [{ text: "👥 Back to Players", callback_data: "admin:players" }],
+                        [{ text: "🔙 Back", callback_data: "admin:back" }],
+                      ],
+                    },
+                  });
+                } else if (action === "adjust_balance_player") {
+                  const targetUserId = parts.slice(2).join(":");
+                  const { data: targetPlayer, error: targetPlayerError } = await supabase
+                    .from("users")
+                    .select("id,name,balance")
+                    .eq("id", targetUserId)
+                    .maybeSingle();
+
+                  if (targetPlayerError || !targetPlayer) {
+                    await sendMessage(
+                      callbackChatId,
+                      "❌ Player not found.",
+                      await mainMenuForTelegramUser(callbackTelegramUserId)
+                    );
+                    continue;
+                  }
+
+                  clearPendingAdminState(callbackTelegramUserId);
+                  pendingAdminBalanceAdjustments.set(callbackTelegramUserId, {
+                    targetUserId: targetPlayer.id,
+                    playerName: targetPlayer.name ?? "Unknown Player",
+                    currentBalance: Number(targetPlayer.balance ?? 0),
+                    step: "amount",
+                  });
+
+                  await sendMessage(
+                    callbackChatId,
+                    `💰 Adjust Balance\n\nPlayer: ${targetPlayer.name ?? "Unknown Player"}\nCurrent balance: $${Number(targetPlayer.balance ?? 0).toFixed(2)}\n\nEnter the amount to add or remove (example: 250 or -250):\nSend /cancel to cancel.`,
+                    await mainMenuForTelegramUser(callbackTelegramUserId)
+                  );
+                } else if (action === "adjust_balance") {
+                  await sendMessage(
+                    callbackChatId,
+                    "💰 Adjust Balance\n\nUse a player detail screen to pick the target player.",
+                    await mainMenuForTelegramUser(
+                      callbackTelegramUserId
+                    )
+                  );
+                } else if (action === "countries") {
+                  const { data: countries, error } = await supabase
+                    .from("countries")
+                    .select(
+                      `id,name,code,current_price,daily_income,upgrade_level,category,market_enabled,owner:users!countries_owner_id_fkey(name)`
+                    )
+                    .order("name");
+
+                  if (error) {
+                    throw new Error(`Countries lookup failed: ${error.message}`);
+                  }
+
+                  let msg = "🌍 Countries\n\n";
+                  const keyboard: unknown[][] = [];
+
+                  if (!countries || countries.length === 0) {
+                    msg += "No countries found.";
+                  } else {
+                    for (const c of countries) {
+                      const owner = Array.isArray(c.owner) ? c.owner[0] : c.owner;
+                      msg +=
+                        `🌍 ${c.name} (${c.code ?? "N/A"})\n` +
+                        `Owner: ${owner?.name ?? "Unowned"}\n` +
+                        `Current price: $${Number(c.current_price ?? 0).toFixed(2)}\n` +
+                        `Daily income: $${Number(c.daily_income ?? 0).toFixed(2)}/day\n` +
+                        `Upgrade level: ${Number(c.upgrade_level ?? 0)}\n` +
+                        `Category: ${c.category ?? "N/A"}\n` +
+                        `Market: ${c.market_enabled === false ? "🔴 Disabled" : "🟢 Available"}\n\n`;
+                      keyboard.push([
+                        {
+                          text: `✏️ Edit ${c.name}`,
+                          callback_data: `admin:country:${c.id}`,
+                        },
+                        {
+                          text: c.market_enabled === false ? "🟢 Enable Market" : "🔴 Disable Market",
+                          callback_data: `admin:country_market_toggle:${c.id}:${c.market_enabled === false ? "on" : "off"}`,
+                        },
+                      ]);
+                    }
+                  }
+
+                  keyboard.push([{ text: "🔙 Back", callback_data: "admin:back" }]);
+
+                  await sendMessage(
+                    callbackChatId,
+                    msg,
+                    keyboard
+                  );
+                } else if (action === "leaderboard") {
+                  await sendMessage(
+                    callbackChatId,
+                    "📊 Leaderboard\n\nSelect a leaderboard:",
+                    [
+                      [
+                        { text: "📈 Current leaderboard", callback_data: "admin:leaderboard_current" },
+                        { text: "📅 Daily leaderboard", callback_data: "admin:leaderboard_daily" },
+                      ],
+                      [{ text: "🔙 Back", callback_data: "admin:back" }],
+                    ]
+                  );
+                } else if (action === "leaderboard_current" || action === "leaderboard_daily") {
+                  const isDaily = action === "leaderboard_daily";
+                  const leaderboard = isDaily
+                    ? await getDailyLeaderboard()
+                    : await getLeaderboard();
+
+                  let msg = isDaily
+                    ? "📅 Daily Leaderboard\n\n"
+                    : "📈 Current Leaderboard\n\n";
+
+                  if (!leaderboard || leaderboard.length === 0) {
+                    msg += "No players found.";
+                  } else {
+                    for (let i = 0; i < Math.min(10, leaderboard.length); i++) {
+                      const player = leaderboard[i];
+                      const rank = Number(player.rank ?? i + 1);
+                      const name = player.name ?? player.player_name ?? "Unknown";
+                      const score = Number(
+                        player.net_worth ??
+                          player.total_value ??
+                          player.daily_income ??
+                          player.score ??
+                          0
+                      );
+                      msg += `${rank}. ${name} — $${score.toFixed(2)}\n`;
+                    }
+                  }
+
+                  await sendMessage(callbackChatId, msg, [
+                    [
+                      { text: "📈 Current", callback_data: "admin:leaderboard_current" },
+                      { text: "📅 Daily", callback_data: "admin:leaderboard_daily" },
+                    ],
+                    [{ text: "🔙 Back", callback_data: "admin:back" }],
+                  ]);
+                } else if (action === "back") {
+                  clearPendingAdminState(callbackTelegramUserId);
+                  await sendMessage(
+                    callbackChatId,
+                    "🔙 Back",
+                    await mainMenuForTelegramUser(
+                      callbackTelegramUserId
+                    )
+                  );
+                } else {
+                  await sendMessage(
+                    callbackChatId,
+                    "❌ Unsupported admin action.",
+                    await mainMenuForTelegramUser(callbackTelegramUserId)
+                  );
+                }
+              } catch (err) {
+                console.error("Admin action error:", err);
+                if (action === "settings_confirm") {
+                  pendingAdminSettingsChanges.delete(callbackTelegramUserId);
+                }
+                if (action === "status_confirm") {
+                  pendingAdminStatusChanges.delete(callbackTelegramUserId);
+                }
+                await sendMessage(
+                  callbackChatId,
+                  "❌ Admin action failed.",
+                  await mainMenuForTelegramUser(
+                    callbackTelegramUserId
+                  )
+                );
+              }
+            }
+
+            continue;
+          }
+
           if (
             callbackData?.startsWith(
               "upgrade_country:"
@@ -1233,7 +2079,7 @@ async function startTelegramBot() {
                     `You need $${(
                       cost - available
                     ).toFixed(2)} more.`,
-                    mainMenu()
+                    await mainMenuForTelegramUser(callbackTelegramUserId)
                   );
                 }
 
@@ -1365,7 +2211,7 @@ async function startTelegramBot() {
                     country?.daily_income ?? 0
                   ).toFixed(2)}/day\n\n` +
                   `🏗️ Your country has been upgraded successfully.`,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -1423,7 +2269,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   message,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -1443,7 +2289,7 @@ async function startTelegramBot() {
               await sendMessage(
                 callbackChatId,
                 "❌ Upgrade cancelled.",
-                mainMenu()
+                await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
 
@@ -1697,7 +2543,7 @@ async function startTelegramBot() {
                   `📈 Level: ${Number(country?.upgrade_level ?? 0)}\n` +
                   `💰 Daily income: $${getCountryDailyIncome(country ?? {}).toFixed(2)}/day\n\n` +
                   `You now own this country and will receive its daily income.`,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -1718,7 +2564,7 @@ async function startTelegramBot() {
                   callbackChatId,
                   "❌ I couldn't complete this purchase.\n\n" +
                   "The country may already be owned or you may not have enough available balance.",
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -1740,7 +2586,7 @@ async function startTelegramBot() {
               await sendMessage(
                 callbackChatId,
                 "❌ Purchase cancelled.",
-                mainMenu()
+                await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
 
@@ -1917,7 +2763,7 @@ async function startTelegramBot() {
                   `🌍 ${countryName}\n` +
                   `💵 Sale value: $${salePrice.toFixed(2)}\n\n` +
                   `The country is now available in the market.`,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -1938,7 +2784,7 @@ async function startTelegramBot() {
                   callbackChatId,
                   "❌ I couldn't sell this country.\n\n" +
                   "The country may no longer be owned by you.",
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -1959,7 +2805,7 @@ async function startTelegramBot() {
               await sendMessage(
                 callbackChatId,
                 "❌ Sale cancelled.",
-                mainMenu()
+                await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
 
@@ -2032,7 +2878,7 @@ async function startTelegramBot() {
                   `🌍 Country: ${countryName}\n` +
                   `💰 Purchase price: $${price.toFixed(2)}\n\n` +
                   `The country has been transferred to the buyer.`,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -2102,7 +2948,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   errorMessage,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -2144,7 +2990,7 @@ async function startTelegramBot() {
                   callbackChatId,
                   "❌ Offer rejected successfully.\n\n" +
                   "💳 The buyer's reserved money has been released.",
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -2165,7 +3011,7 @@ async function startTelegramBot() {
                   callbackChatId,
                   "❌ I couldn't reject this offer.\n\n" +
                   "The offer may have expired, already been accepted, rejected, or cancelled.",
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -2215,7 +3061,7 @@ async function startTelegramBot() {
                   callbackChatId,
                   "❌ Offer cancelled successfully.\n\n" +
                   "The reserved money has been released.",
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -2236,7 +3082,7 @@ async function startTelegramBot() {
                   callbackChatId,
                   "❌ I couldn't cancel this offer.\n\n" +
                   "It may have already been accepted, cancelled, or expired.",
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -2444,7 +3290,7 @@ async function startTelegramBot() {
                   ).toFixed(2)}\n\n` +
                   `💳 The amount has been reserved.\n` +
                   `⏰ Expires: ${expiresAt}`,
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             } catch (error) {
@@ -2472,7 +3318,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   getUserFriendlyGameError(error),
-                  mainMenu()
+                  await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
             }
@@ -2503,7 +3349,7 @@ async function startTelegramBot() {
               await sendMessage(
                 callbackChatId,
                 "❌ Offer creation cancelled.",
-                mainMenu()
+                await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
 
@@ -2600,10 +3446,46 @@ async function startTelegramBot() {
         const text =
           message.text.trim();
 
+        if (
+          (pendingAdminBalanceAdjustments.has(telegramUserId) ||
+            pendingAdminCountryUpdates.has(telegramUserId) ||
+            pendingAdminSettingsInputs.has(telegramUserId)) &&
+          (text === "/cancel" || text === "❌ Cancel")
+        ) {
+          clearPendingAdminState(telegramUserId);
+          await sendMessage(
+            chatId,
+            "❌ Admin action cancelled.",
+            await mainMenuForTelegramUser(telegramUserId)
+          );
+          continue;
+        }
+
+        if (pendingAdminSettingsInputs.has(telegramUserId)) {
+          const startingBalance = Number(text);
+          if (!Number.isFinite(startingBalance) || startingBalance < 0 || startingBalance > 1000000000) {
+            await sendMessage(chatId, "❌ Invalid starting balance. Enter a number from 0 to 1,000,000,000 or send /cancel.", await mainMenuForTelegramUser(telegramUserId));
+            continue;
+          }
+          pendingAdminSettingsInputs.delete(telegramUserId);
+          pendingAdminSettingsChanges.set(telegramUserId, {
+            kind: "starting_balance",
+            value: startingBalance,
+            description: `Starting balance: $${startingBalance.toFixed(2)}`,
+          });
+          await sendMessage(chatId, `⚠️ Confirm change\n\nStarting balance: $${startingBalance.toFixed(2)}?`, [[
+            { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
+            { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
+          ]]);
+          continue;
+        }
+
         /*
  * /start
  */
         if (text === "/start") {
+          clearPendingAdminState(telegramUserId);
+
           const existingUser =
             await findUserByTelegramId(
               telegramUserId
@@ -2613,7 +3495,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               `🎮 Welcome back, ${existingUser.name}!`,
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
 
             registrationState.delete(
@@ -2721,7 +3603,7 @@ async function startTelegramBot() {
               chatId,
               `🎉 Welcome, ${existingUser.name}! 🎮\n\n` +
               "Your Telegram account has been linked successfully.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
 
             continue;
@@ -2832,7 +3714,7 @@ async function startTelegramBot() {
                 newUser.balance
               ).toFixed(2)}\n\n` +
               "Your Telegram account is now linked to your game account.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
 
             continue;
@@ -3053,6 +3935,173 @@ async function startTelegramBot() {
           }
         }
 
+        if (pendingAdminCountryUpdates.has(telegramUserId)) {
+          const pending = pendingAdminCountryUpdates.get(telegramUserId)!;
+
+          if (pending.step === "current_price" || pending.step === "daily_income") {
+            const value = Number(text.trim());
+
+            if (!Number.isFinite(value) || value < 0) {
+              await sendMessage(
+                chatId,
+                "❌ Invalid value. Please enter a non-negative numeric value.",
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+              continue;
+            }
+
+            if (pending.step === "current_price") {
+              pendingAdminCountryUpdates.set(telegramUserId, {
+                ...pending,
+                nextCurrentPrice: value,
+                step: "daily_income",
+              });
+
+              await sendMessage(
+                chatId,
+                `✏️ Edit Country\n\nCountry: ${pending.countryName}\nNew current price: $${value.toFixed(2)}\n\nEnter the new daily income:\nSend /cancel to cancel.`,
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+            } else {
+              pendingAdminCountryUpdates.set(telegramUserId, {
+                ...pending,
+                nextDailyIncome: value,
+                step: "reason",
+              });
+
+              await sendMessage(
+                chatId,
+                `✏️ Edit Country\n\nCountry: ${pending.countryName}\nNew current price: $${pending.nextCurrentPrice!.toFixed(2)}\nNew daily income: $${value.toFixed(2)}/day\n\nEnter a reason for this update:\nSend /cancel to cancel.`,
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+            }
+
+            continue;
+          }
+
+          if (pending.step === "reason") {
+            const reason = text.trim();
+
+            if (!reason) {
+              await sendMessage(
+                chatId,
+                "❌ Please provide a reason for the country update.",
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+              continue;
+            }
+
+            const confirmedPending = {
+              ...pending,
+              reason,
+              step: "confirm" as const,
+            };
+            pendingAdminCountryUpdates.set(telegramUserId, confirmedPending);
+
+            await telegramRequest("sendMessage", {
+              chat_id: chatId,
+              text:
+                `✏️ Confirm Country Update\n\n` +
+                `Country: ${pending.countryName}\n` +
+                `Current price: $${pending.nextCurrentPrice!.toFixed(2)}\n` +
+                `Daily income: $${pending.nextDailyIncome!.toFixed(2)}/day\n` +
+                `Reason: ${reason}\n\n` +
+                "Do you want to proceed?",
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: "✅ Confirm", callback_data: "admin:country_confirm" },
+                  { text: "❌ Cancel", callback_data: "admin:country_cancel" },
+                ]],
+              },
+            });
+            continue;
+          }
+        }
+
+        if (pendingAdminBalanceAdjustments.has(telegramUserId)) {
+          const pending = pendingAdminBalanceAdjustments.get(telegramUserId)!;
+
+          if (pending.step === "amount") {
+            const amount = Number(text.trim());
+
+            if (!Number.isFinite(amount) || amount === 0) {
+              await sendMessage(
+                chatId,
+                "❌ Invalid amount. Please enter a numeric value, for example 250 or -250.",
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+              continue;
+            }
+
+            const nextPending = {
+              ...pending,
+              amount,
+              step: "reason" as const,
+            };
+            pendingAdminBalanceAdjustments.set(telegramUserId, nextPending);
+
+            await sendMessage(
+              chatId,
+              `💰 Adjust Balance\n\nPlayer: ${nextPending.playerName}\nAmount: $${amount.toFixed(2)}\n\nEnter a reason for this adjustment:\nSend /cancel to cancel.`,
+              await mainMenuForTelegramUser(telegramUserId)
+            );
+            continue;
+          }
+
+          if (pending.step === "reason") {
+            const reason = text.trim();
+
+            if (!reason) {
+              await sendMessage(
+                chatId,
+                "❌ Please provide a reason for the adjustment.",
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+              continue;
+            }
+
+            const amount = pending.amount ?? 0;
+            const resultingBalance = pending.currentBalance + amount;
+
+            if (resultingBalance < 0) {
+              pendingAdminBalanceAdjustments.delete(telegramUserId);
+              await sendMessage(
+                chatId,
+                `❌ Balance adjustment failed.\n\nThe resulting balance would be negative: $${resultingBalance.toFixed(2)}.`,
+                await mainMenuForTelegramUser(telegramUserId)
+              );
+              continue;
+            }
+
+            pendingAdminBalanceAdjustments.set(telegramUserId, {
+              ...pending,
+              reason,
+              step: "confirm",
+            });
+
+            await telegramRequest("sendMessage", {
+              chat_id: chatId,
+              text:
+                `💰 Confirm Balance Adjustment\n\n` +
+                `Player: ${pending.playerName}\n` +
+                `Amount: $${amount.toFixed(2)}\n` +
+                `Current balance: $${pending.currentBalance.toFixed(2)}\n` +
+                `Resulting balance: $${resultingBalance.toFixed(2)}\n` +
+                `Reason: ${reason}\n\n` +
+                `Do you want to proceed?`,
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: "✅ Confirm", callback_data: "admin:confirm_balance_adjust" },
+                    { text: "❌ Cancel", callback_data: "admin:cancel_balance_adjust" },
+                  ],
+                ],
+              },
+            });
+            continue;
+          }
+        }
+
         if (text === "🔨 Upgrade Country") {
           try {
             const result = await getPlayerCountries(
@@ -3063,7 +4112,7 @@ async function startTelegramBot() {
               await sendMessage(
                 chatId,
                 "❌ Your Telegram account is not linked to a game account.",
-                mainMenu()
+                await mainMenuForTelegramUser(telegramUserId)
               );
 
               continue;
@@ -3077,7 +4126,7 @@ async function startTelegramBot() {
                 "🔨 UPGRADE COUNTRY\n\n" +
                 "You don't own any countries yet.\n\n" +
                 "Buy a country first from 🏪 Market.",
-                mainMenu()
+                await mainMenuForTelegramUser(telegramUserId)
               );
 
               continue;
@@ -3156,7 +4205,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Unable to load upgrade options right now.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           }
 
@@ -3173,7 +4222,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Your Telegram account is not linked to a game account.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
 
             continue;
@@ -3214,7 +4263,7 @@ async function startTelegramBot() {
               `Available: $${balance.toFixed(2)}\n` +
               `Reserved: $${reserved.toFixed(2)}\n` +
               `Total: $${total.toFixed(2)}`,
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           } catch (error) {
             console.error(
@@ -3225,7 +4274,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ I couldn't load your balance right now.\n\nPlease try again.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           }
 
@@ -3242,7 +4291,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Your Telegram account is not linked to a game account.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
 
             continue;
@@ -3256,7 +4305,7 @@ async function startTelegramBot() {
               "🌍 My Countries\n\n" +
               "You don't own any countries yet.\n\n" +
               "Visit 🏪 Market to find a country to buy.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
 
             continue;
@@ -3343,7 +4392,7 @@ async function startTelegramBot() {
                 chatId,
                 "📊 Leaderboard\n\n" +
                 "No players found yet.",
-                mainMenu()
+                await mainMenuForTelegramUser(telegramUserId)
               );
 
               continue;
@@ -3394,7 +4443,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               message,
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           } catch (error) {
             console.error(
@@ -3405,9 +4454,37 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Unable to load the leaderboard right now.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           }
+
+          continue;
+        }
+
+        if (text === "⚙️ Admin Panel") {
+          const isAdmin = await isTelegramUserAdmin(
+            telegramUserId
+          );
+
+          if (!isAdmin) {
+            await sendMessage(
+              chatId,
+              "❌ You are not authorized to access the admin panel.",
+              await mainMenuForTelegramUser(telegramUserId)
+            );
+            continue;
+          }
+
+          await telegramRequest(
+            "sendMessage",
+            {
+              chat_id: chatId,
+              text: "⚙️ Admin Panel\n\nSelect an action:",
+              reply_markup: {
+                inline_keyboard: adminPanelKeyboard(),
+              },
+            }
+          );
 
           continue;
         }
@@ -3429,7 +4506,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Unable to load the market right now.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           }
 
@@ -3447,7 +4524,7 @@ async function startTelegramBot() {
               await sendMessage(
                 chatId,
                 "❌ Your Telegram account is not linked.",
-                mainMenu()
+                await mainMenuForTelegramUser(telegramUserId)
               );
 
               continue;
@@ -3727,7 +4804,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Unable to load your offers right now.",
-              mainMenu()
+              await mainMenuForTelegramUser(telegramUserId)
             );
           }
 
