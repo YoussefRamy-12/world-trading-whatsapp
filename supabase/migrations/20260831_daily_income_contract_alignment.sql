@@ -89,7 +89,7 @@ BEGIN
     p_country_id,
     p_price,
     'active',
-    NOW() + INTERVAL '7 days'
+    NOW() + INTERVAL '15 minutes'
   )
   RETURNING id INTO v_offer_id;
 
@@ -300,26 +300,26 @@ END;
 $$;
 
 -- Compatibility for the legacy admin RPC name if the existing database still exposes hourly_income
-CREATE OR REPLACE FUNCTION public.admin_update_country_legacy(
-  p_admin_id uuid,
-  p_country_id uuid,
-  p_current_price numeric,
-  p_hourly_income numeric,
-  p_reason text
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  RETURN public.admin_update_country(
-    p_admin_id,
-    p_country_id,
-    p_current_price,
-    p_hourly_income,
-    p_reason
-  );
-END;
-$$;
+-- CREATE OR REPLACE FUNCTION public.admin_update_country_legacy(
+--   p_admin_id uuid,
+--   p_country_id uuid,
+--   p_current_price numeric,
+--   p_hourly_income numeric,
+--   p_reason text
+-- )
+-- RETURNS jsonb
+-- LANGUAGE plpgsql
+-- SECURITY DEFINER
+-- AS $$
+-- BEGIN
+--   RETURN public.admin_update_country(
+--     p_admin_id,
+--     p_country_id,
+--     p_current_price,
+--     p_hourly_income,
+--     p_reason
+--   );
+-- END;
+-- $$;
 
 COMMIT;

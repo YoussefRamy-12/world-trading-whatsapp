@@ -979,6 +979,45 @@ async function createPlayerCountryOffer(
   );
 }
 
+function getUserFriendlyGameError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  switch (message) {
+    case 'LEVEL_0_COUNTRY_NOT_FOR_SALE':
+      return '❌ This country is Level 0 and cannot be offered for sale. Upgrade it first.';
+
+    case 'INSUFFICIENT_FUNDS':
+      return '❌ You do not have enough available balance for this offer.';
+
+    case 'INVALID_PRICE':
+      return '❌ The offer price is invalid. Please enter a valid amount.';
+
+    case 'CANNOT_OFFER_OWN_COUNTRY':
+      return '❌ You already own this country.';
+
+    case 'COUNTRY_NOT_FOUND':
+      return '❌ This country could not be found.';
+
+    case 'PLAYER_NOT_FOUND':
+      return '❌ Your player account could not be found.';
+
+    case 'OFFER_NOT_FOUND':
+      return '❌ This offer no longer exists.';
+
+    case 'OFFER_NOT_ACTIVE':
+      return '❌ This offer is no longer active.';
+
+    case 'NOT_COUNTRY_OWNER':
+      return '❌ You are no longer the owner of this country.';
+
+    case 'NOT_OFFER_BUYER':
+      return '❌ You can only cancel your own offers.';
+
+    default:
+      return '❌ Something went wrong. Please try again.';
+  }
+}
+
 async function acceptPlayerCountryOffer(
   telegramUserId: number,
   offerId: string
@@ -1927,6 +1966,150 @@ async function startTelegramBot() {
             continue;
           }
 
+                    if (
+            callbackData?.startsWith(
+              "accept_offer:"
+            )
+          ) {
+            const offerId =
+              callbackData.substring(
+                "accept_offer:".length
+              );
+
+            try {
+              const result =
+                await acceptPlayerCountryOffer(
+                  callbackTelegramUserId,
+                  offerId
+                );
+
+              console.log(
+                "Country offer accepted:",
+                result
+              );
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "✅ Offer accepted!"
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                const acceptedOffer =
+                  Array.isArray(result)
+                    ? result[0]
+                    : result;
+
+                const countryId =
+                  acceptedOffer?.country_id;
+
+                let countryName =
+                  "the country";
+
+                if (countryId) {
+                  const {
+                    data: country,
+                  } = await supabase
+                    .from("countries")
+                    .select("name,current_price")
+                    .eq("id", countryId)
+                    .maybeSingle();
+
+                  countryName =
+                    country?.name ??
+                    countryName;
+                }
+
+                const price =
+                  Number(
+                    acceptedOffer?.price ?? 0
+                  );
+
+                await sendMessage(
+                  callbackChatId,
+                  `✅ Offer accepted successfully!\n\n` +
+                  `🌍 Country: ${countryName}\n` +
+                  `💰 Purchase price: $${price.toFixed(2)}\n\n` +
+                  `The country has been transferred to the buyer.`,
+                  mainMenu()
+                );
+              }
+            } catch (error) {
+              console.error(
+                "Accept offer error:",
+                error
+              );
+
+              let errorMessage =
+                "❌ I couldn't accept this offer.";
+
+              const errorCode =
+                error instanceof Error
+                  ? error.message
+                  : String(error);
+
+              switch (errorCode) {
+                case "OFFER_NOT_FOUND":
+                  errorMessage =
+                    "❌ This offer could not be found.\n\n" +
+                    "It may have already been removed.";
+                  break;
+
+                case "OFFER_NOT_ACTIVE":
+                  errorMessage =
+                    "❌ This offer is no longer active.\n\n" +
+                    "It may have already been accepted, rejected, cancelled, or expired.";
+                  break;
+
+                case "NOT_COUNTRY_OWNER":
+                  errorMessage =
+                    "❌ You are no longer the owner of this country.";
+                  break;
+
+                case "LEVEL_0_COUNTRY_NOT_FOR_SALE":
+                  errorMessage =
+                    "❌ This country cannot be traded yet.\n\n" +
+                    "The country must be upgraded before it can be sold or accepted through an offer.";
+                  break;
+
+                case "PLAYER_NOT_FOUND":
+                case "TELEGRAM_ACCOUNT_NOT_LINKED":
+                  errorMessage =
+                    "❌ Your Telegram account is not properly linked to a game account.";
+                  break;
+
+                case "INSUFFICIENT_FUNDS":
+                  errorMessage =
+                    "❌ The buyer no longer has enough reserved money for this offer.";
+                  break;
+
+                default:
+                  errorMessage =
+                    `❌ I couldn't accept this offer.\n\n` +
+                    `Reason: ${errorCode}`;
+                  break;
+              }
+
+              await answerCallbackQuery(
+                callbackQuery.id,
+                "❌ Offer could not be accepted."
+              );
+
+              if (
+                callbackChatId !== undefined
+              ) {
+                await sendMessage(
+                  callbackChatId,
+                  errorMessage,
+                  mainMenu()
+                );
+              }
+            }
+
+            continue;
+          }
+
           if (
             callbackData?.startsWith(
               "reject_offer:"
@@ -2288,8 +2471,7 @@ async function startTelegramBot() {
               ) {
                 await sendMessage(
                   callbackChatId,
-                  `❌ Couldn't create the offer.\n\n` +
-                  `${formatOfferError(error)}`,
+                  getUserFriendlyGameError(error),
                   mainMenu()
                 );
               }
