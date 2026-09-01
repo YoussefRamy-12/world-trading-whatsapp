@@ -14,6 +14,7 @@ DECLARE
   v_market public.market_settings%ROWTYPE;
   v_country public.countries%ROWTYPE;
   v_player public.users%ROWTYPE;
+  v_prev_owner public.users%ROWTYPE;
 BEGIN
   SELECT * INTO v_game
   FROM public.game_settings
@@ -84,6 +85,18 @@ BEGIN
   UPDATE public.users
   SET balance = COALESCE(balance, 0) - COALESCE(v_country.current_price, 0)
   WHERE id = p_player_id;
+
+  IF v_country.owner_id IS NOT NULL THEN
+    -- lock previous owner and credit them according to existing contract
+    SELECT * INTO v_prev_owner
+    FROM public.users
+    WHERE id = v_country.owner_id
+    FOR UPDATE;
+
+    UPDATE public.users
+    SET balance = COALESCE(balance, 0) + COALESCE(v_country.current_price, 0)
+    WHERE id = v_country.owner_id;
+  END IF;
 
   UPDATE public.countries
   SET owner_id = p_player_id,
@@ -470,6 +483,10 @@ BEGIN
 
   PERFORM public.collect_player_hourly_income(p_buyer_id);
 
+  IF COALESCE(v_buyer.reserved_balance, 0) < v_offer.price THEN
+    RAISE EXCEPTION 'RESERVED_BALANCE_INSUFFICIENT';
+  END IF;
+
   UPDATE public.users
   SET reserved_balance = COALESCE(reserved_balance, 0) - v_offer.price
   WHERE id = p_buyer_id;
@@ -508,6 +525,7 @@ DECLARE
   v_seller public.users%ROWTYPE;
   v_buyer public.users%ROWTYPE;
   v_competing_offer public.offers%ROWTYPE;
+v_competing_buyer public.users%ROWTYPE;
 BEGIN
   SELECT * INTO v_game
   FROM public.game_settings
@@ -613,6 +631,16 @@ BEGIN
       AND o.status = 'active'
     FOR UPDATE
   LOOP
+    -- lock competing buyer and ensure they have sufficient reserved balance
+    SELECT * INTO v_competing_buyer
+    FROM public.users
+    WHERE id = v_competing_offer.buyer_id
+    FOR UPDATE;
+
+    IF COALESCE(v_competing_buyer.reserved_balance, 0) < v_competing_offer.price THEN
+      RAISE EXCEPTION 'RESERVED_BALANCE_INSUFFICIENT';
+    END IF;
+
     UPDATE public.users
     SET reserved_balance = COALESCE(reserved_balance, 0) - v_competing_offer.price
     WHERE id = v_competing_offer.buyer_id;
