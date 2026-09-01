@@ -1388,6 +1388,13 @@ async function startTelegramBot() {
           if (callbackData?.startsWith("admin:")) {
             const parts = callbackData.split(":");
             const action = parts[1] ?? "";
+            // Diagnostic: log admin callback routing info (no sensitive credentials)
+            console.debug && console.debug("ADMIN CALLBACK RECEIVED:", {
+              callbackData,
+              action,
+              parts,
+              telegramAdminId: callbackTelegramUserId,
+            });
 
             // Re-query the database for admin rights
             const isAdmin = await isTelegramUserAdmin(
@@ -1502,10 +1509,16 @@ async function startTelegramBot() {
                     value: parsedValue,
                     description,
                   });
-                  await sendMessage(callbackChatId, `⚠️ Confirm change\n\n${description}?`, [[
-                    { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
-                    { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
-                  ]]);
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text: `⚠️ Confirm change\n\n${description}?`,
+                    reply_markup: {
+                      inline_keyboard: [[
+                        { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
+                        { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
+                      ]],
+                    },
+                  });
                 } else if (action === "game_settings" || action === "market" || action === "market_settings") {
                   const settings = await getGameSettings();
                   const isMarket = action === "market" || action === "market_settings";
@@ -1525,7 +1538,13 @@ async function startTelegramBot() {
                       [{ text: "💵 Starting Balance", callback_data: "admin:settings_starting_balance" }],
                         [{ text: "🔙 Back", callback_data: "admin:settings_back" }],
                       ];
-                  await sendMessage(callbackChatId, text, keyboard);
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text,
+                    reply_markup: {
+                      inline_keyboard: keyboard,
+                    },
+                  });
                 } else if (action === "settings_back") {
                   clearPendingAdminState(callbackTelegramUserId);
                   await sendMessage(
@@ -1544,10 +1563,16 @@ async function startTelegramBot() {
                     enabled,
                     description: `Country market availability ${enabled ? "enabled" : "disabled"}`,
                   });
-                  await sendMessage(callbackChatId, `⚠️ Confirm change\n\n${enabled ? "Enable" : "Disable"} this country in the market?`, [[
-                    { text: "✅ Confirm", callback_data: "admin:status_confirm" },
-                    { text: "❌ Cancel", callback_data: "admin:status_cancel" },
-                  ]]);
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text: `⚠️ Confirm change\n\n${enabled ? "Enable" : "Disable"} this country in the market?`,
+                    reply_markup: {
+                      inline_keyboard: [[
+                        { text: "✅ Confirm", callback_data: "admin:status_confirm" },
+                        { text: "❌ Cancel", callback_data: "admin:status_cancel" },
+                      ]],
+                    },
+                  });
                 } else if (action === "player_active") {
                   const playerId = parts[2];
                   const enabled = parts[3] === "on";
@@ -1559,10 +1584,16 @@ async function startTelegramBot() {
                     enabled,
                     description: `Player ${enabled ? "enable" : "disable"}`,
                   });
-                  await sendMessage(callbackChatId, `⚠️ Confirm change\n\n${enabled ? "Enable" : "Disable"} this player?`, [[
-                    { text: "✅ Confirm", callback_data: "admin:status_confirm" },
-                    { text: "❌ Cancel", callback_data: "admin:status_cancel" },
-                  ]]);
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text: `⚠️ Confirm change\n\n${enabled ? "Enable" : "Disable"} this player?`,
+                    reply_markup: {
+                      inline_keyboard: [[
+                        { text: "✅ Confirm", callback_data: "admin:status_confirm" },
+                        { text: "❌ Cancel", callback_data: "admin:status_cancel" },
+                      ]],
+                    },
+                  });
                 } else if (action === "confirm_balance_adjust") {
                   const pending = pendingAdminBalanceAdjustments.get(callbackTelegramUserId);
 
@@ -3480,10 +3511,16 @@ async function startTelegramBot() {
             value: startingBalance,
             description: `Starting balance: $${startingBalance.toFixed(2)}`,
           });
-          await sendMessage(chatId, `⚠️ Confirm change\n\nStarting balance: $${startingBalance.toFixed(2)}?`, [[
-            { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
-            { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
-          ]]);
+          await telegramRequest("sendMessage", {
+            chat_id: chatId,
+            text: `⚠️ Confirm change\n\nStarting balance: $${startingBalance.toFixed(2)}?`,
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
+                { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
+              ]],
+            },
+          });
           continue;
         }
 
