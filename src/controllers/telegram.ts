@@ -177,7 +177,7 @@ function adminPanelKeyboard(): unknown[][] {
       },
       {
         text: "🌐 Market Settings",
-        callback_data: "admin:market",
+        callback_data: "admin:market_settings",
       },
     ],
     [
@@ -1506,9 +1506,9 @@ async function startTelegramBot() {
                     { text: "✅ Confirm", callback_data: "admin:settings_confirm" },
                     { text: "❌ Cancel", callback_data: "admin:settings_cancel" },
                   ]]);
-                } else if (action === "game_settings" || action === "market") {
+                } else if (action === "game_settings" || action === "market" || action === "market_settings") {
                   const settings = await getGameSettings();
-                  const isMarket = action === "market";
+                  const isMarket = action === "market" || action === "market_settings";
                   const text = isMarket
                     ? `🌐 Market Settings\n\nMarket: ${settings.market_enabled ? "🟢 ON" : "🔴 OFF"}\nIncome: ${String(settings.income_mode ?? "daily").toUpperCase()}\nOffer duration: ${settings.offer_duration_minutes} minutes\nMinimum price: ${(Number(settings.min_price_percent) * 100).toFixed(0)}%\nMaximum price: ${(Number(settings.max_price_percent) * 100).toFixed(0)}%`
                     : `⚙️ Game Settings\n\nGame: ${settings.game_active ? "🟢 ACTIVE" : "🔴 INACTIVE"}\nIncome mode: ${String(settings.income_mode ?? "daily").toUpperCase()}\nStarting balance: $${Number(settings.starting_balance ?? 0).toFixed(2)}`;
@@ -1517,15 +1517,22 @@ async function startTelegramBot() {
                         [{ text: settings.market_enabled ? "🔴 Turn Market OFF" : "🟢 Turn Market ON", callback_data: `admin:settings_market:${settings.market_enabled ? "off" : "on"}` }],
                         [{ text: "⏱ 5 min", callback_data: "admin:settings_duration:5" }, { text: "⏱ 15 min", callback_data: "admin:settings_duration:15" }, { text: "⏱ 60 min", callback_data: "admin:settings_duration:60" }],
                         [{ text: "📉 Min 80%", callback_data: "admin:settings_min_price:0.8" }, { text: "📈 Max 120%", callback_data: "admin:settings_max_price:1.2" }],
-                        [{ text: "🔙 Back", callback_data: "admin:back" }],
+                        [{ text: "🔙 Back", callback_data: "admin:settings_back" }],
                       ]
                     : [
                       [{ text: settings.game_active ? "🔴 Turn Game OFF" : "🟢 Turn Game ON", callback_data: `admin:settings_game:${settings.game_active ? "off" : "on"}` }],
                         [{ text: "📅 Daily", callback_data: "admin:settings_mode:daily" }, { text: "⏰ Hourly", callback_data: "admin:settings_mode:hourly" }],
                       [{ text: "💵 Starting Balance", callback_data: "admin:settings_starting_balance" }],
-                        [{ text: "🔙 Back", callback_data: "admin:back" }],
+                        [{ text: "🔙 Back", callback_data: "admin:settings_back" }],
                       ];
                   await sendMessage(callbackChatId, text, keyboard);
+                } else if (action === "settings_back") {
+                  clearPendingAdminState(callbackTelegramUserId);
+                  await sendMessage(
+                    callbackChatId,
+                    "⚙️ Admin Panel\n\nSelect an action:",
+                    adminPanelKeyboard()
+                  );
                 } else if (action === "country_market_toggle") {
                   const countryId = parts[2];
                   if (!countryId) throw new Error("COUNTRY_NOT_FOUND");
