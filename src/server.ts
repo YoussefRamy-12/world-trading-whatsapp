@@ -505,8 +505,7 @@ app.post(
           req.params.countryId,
           Number(req.body.currentPrice),
           Number(
-            req.body.dailyIncome ??
-              req.body.hourlyIncome ??
+            req.body.hourlyIncome ??
               0
           ),
           req.body.reason

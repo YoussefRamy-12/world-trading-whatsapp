@@ -106,7 +106,7 @@ async function assertPlayerActive(playerId: string) {
   if (data.is_active === false) throw new Error("PLAYER_DISABLED");
 }
 
-export function getCountryDailyIncome(country: {
+export function getCountryHourlyIncome(country: {
   base_daily_income?: number | string | null;
   daily_income?: number | string | null;
   category?: string | null;
@@ -138,8 +138,10 @@ export function getCountryDailyIncome(country: {
       Number(country.daily_income ?? 0) - completedBuildingIncome;
   }
 
-  return Math.max(0, baseIncome + completedBuildingIncome);
+  return Math.max(0, baseIncome + completedBuildingIncome) / 24;
 }
+
+export const getCountryDailyIncome = getCountryHourlyIncome;
 
 function getCairoPeriodKey(date: Date, mode: "daily" | "hourly") {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -203,8 +205,6 @@ function getMissedPayoutCount(
 }
 
 export async function collectPlayerIncome(playerId: string) {
-  const incomeMode = "hourly";
-
   const { data: countries, error } = await supabase
     .from("countries")
     .select("*")
@@ -230,23 +230,23 @@ export async function collectPlayerIncome(playerId: string) {
       continue;
     }
 
-    const dailyIncome = getCountryDailyIncome(country);
+    const hourlyIncome = getCountryHourlyIncome(country);
 
-    if (dailyIncome <= 0) {
+    if (hourlyIncome <= 0) {
       continue;
     }
 
-    const lastPaidAt = country.daily_income_last_paid_at
-      ? new Date(country.daily_income_last_paid_at)
+    const lastPaidAt = country.hourly_income_last_paid_at ?? country.daily_income_last_paid_at
+      ? new Date(country.hourly_income_last_paid_at ?? country.daily_income_last_paid_at)
       : new Date(country.owned_since);
 
-    const missedPeriods = getMissedPayoutCount(lastPaidAt, now, incomeMode);
+    const missedPeriods = getMissedPayoutCount(lastPaidAt, now, "hourly");
 
     if (missedPeriods <= 0) {
       continue;
     }
 
-    const income = dailyIncome * missedPeriods;
+    const income = hourlyIncome * missedPeriods;
 
     totalIncome += income;
 
@@ -259,8 +259,9 @@ export async function collectPlayerIncome(playerId: string) {
     await supabase
       .from("countries")
       .update({
-        daily_income: dailyIncome,
+        daily_income: hourlyIncome * 24,
         daily_income_last_paid_at: now.toISOString(),
+        hourly_income_last_paid_at: now.toISOString(),
       })
       .eq("id", country.id);
   }
@@ -669,7 +670,7 @@ export async function adminUpdateCountry(
   adminId: string,
   countryId: string,
   currentPrice: number,
-  dailyIncome: number,
+  hourlyIncome: number,
   reason: string
 ) {
   const baseArgs = {
@@ -683,7 +684,7 @@ export async function adminUpdateCountry(
     "admin_update_country",
     {
       ...baseArgs,
-      p_daily_income: dailyIncome,
+      p_hourly_income: hourlyIncome,
     }
   );
 
@@ -692,7 +693,7 @@ export async function adminUpdateCountry(
       "admin_update_country",
       {
         ...baseArgs,
-        p_hourly_income: dailyIncome,
+        p_daily_income: hourlyIncome,
       }
     );
 
