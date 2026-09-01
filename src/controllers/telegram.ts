@@ -1547,11 +1547,11 @@ async function startTelegramBot() {
                   });
                 } else if (action === "settings_back") {
                   clearPendingAdminState(callbackTelegramUserId);
-                  await sendMessage(
-                    callbackChatId,
-                    "⚙️ Admin Panel\n\nSelect an action:",
-                    adminPanelKeyboard()
-                  );
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text: "⚙️ Admin Panel\n\nSelect an action:",
+                    reply_markup: { inline_keyboard: adminPanelKeyboard() },
+                  });
                 } else if (action === "country_market_toggle") {
                   const countryId = parts[2];
                   if (!countryId) throw new Error("COUNTRY_NOT_FOUND");
