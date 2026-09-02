@@ -4,7 +4,6 @@ import {
   sellCountry,
   collectPlayerIncome,
   getLeaderboard,
-  getDailyLeaderboard,
   createCountryOffer,
   acceptCountryOffer,
   cancelCountryOffer,
@@ -15,6 +14,7 @@ import {
   adminUpdateGameSettings,
   adminSetCountryMarketAvailability,
   adminSetPlayerActive,
+  getCountryHourlyIncome,
 } from "./game.js";
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -399,39 +399,6 @@ function getCountryBuilding(category?: string | null, level?: number | null) {
   return config[(Number(level ?? 0)) as keyof typeof config];
 }
 
-function getCountryDailyIncome(country: {
-  base_daily_income?: number | string | null;
-  daily_income?: number | string | null;
-  category?: string | null;
-  upgrade_level?: number | string | null;
-}) {
-  const currentLevel = Number(country.upgrade_level ?? 0);
-  const category = String(country.category ?? "silver").trim().toLowerCase();
-  const config =
-    COUNTRY_BUILDING_CONFIG[
-      category as keyof typeof COUNTRY_BUILDING_CONFIG
-    ] ?? COUNTRY_BUILDING_CONFIG.silver;
-
-  let baseIncome = Number(
-    country.base_daily_income ??
-      country.daily_income ??
-      0
-  );
-
-  let completedBuildingIncome = 0;
-
-  for (let level = 1; level <= currentLevel; level += 1) {
-    completedBuildingIncome += Number(
-      config[level as keyof typeof config]?.income ?? 0
-    );
-  }
-
-  if (baseIncome <= 0 && country.daily_income !== undefined) {
-    baseIncome = Number(country.daily_income ?? 0) - completedBuildingIncome;
-  }
-
-  return Math.max(0, baseIncome + completedBuildingIncome);
-}
 
 async function findUserByTelegramId(
   telegramUserId: number
@@ -504,7 +471,7 @@ async function getPlayerCountries(
     await supabase
       .from("countries")
       .select(
-        "id,name,code,current_price,daily_income,upgrade_level,category,base_price"
+      "id,name,code,current_price,hourly_income,upgrade_level,category,base_price"
       )
       .eq("owner_id", player.id)
       .order("name");
@@ -539,7 +506,7 @@ async function getMarketCountries() {
   const { data, error } = await supabase
     .from("countries")
     .select(
-      "id,name,code,current_price,daily_income,upgrade_level,category,base_price"
+      "id,name,code,current_price,hourly_income,upgrade_level,category,base_price"
     )
     .is("owner_id", null)
     .eq("market_enabled", true)
@@ -585,7 +552,7 @@ async function getOtherPlayersCountries(
       name,
       code,
       current_price,
-      daily_income,
+      hourly_income,
       upgrade_level,
       category,
       owner_id,
@@ -702,22 +669,17 @@ async function sendMarketPage(
       const price =
         Number(country.current_price);
 
-      const income =
-        getCountryDailyIncome(country);
+      const income = getCountryHourlyIncome(country);
 
-      const level =
-        Number(country.upgrade_level);
+      const level = Number(country.upgrade_level);
 
-      const code =
-        country.code
-          ? `🌐 ${country.code}`
-          : "🌍";
+      const code = country.code ? `🌐 ${country.code}` : "🌍";
 
       marketMessage +=
         `${code} ${country.name}\n` +
         `💵 Price: $${price.toFixed(2)}\n` +
         `📈 Level: ${level}\n` +
-        `💰 Income: $${income.toFixed(2)}/day\n\n`;
+        `💰 Income: $${income.toFixed(2)}/hour\n\n`;
 
       buttons.push([
         {
@@ -792,34 +754,25 @@ async function sendMarketPage(
       const price =
         Number(country.current_price);
 
-      const income =
-        getCountryDailyIncome(country);
+      const income = getCountryHourlyIncome(country);
 
-      const level =
-        Number(country.upgrade_level);
+      const level = Number(country.upgrade_level);
 
-      const code =
-        country.code
-          ? `🌐 ${country.code}`
-          : "🌍";
+      const code = country.code ? `🌐 ${country.code}` : "🌍";
 
-      const ownerData =
-        country.owner as
+      const ownerData = country.owner as
         | { name?: string }
         | { name?: string }[]
         | null;
 
-      const ownerName =
-        Array.isArray(ownerData)
-          ? ownerData[0]?.name
-          : ownerData?.name;
+      const ownerName = Array.isArray(ownerData) ? ownerData[0]?.name : ownerData?.name;
 
       marketMessage +=
         `${code} ${country.name}\n` +
         `👤 Owner: ${ownerName ?? "Unknown"}\n` +
         `💵 Value: $${price.toFixed(2)}\n` +
         `📈 Level: ${level}\n` +
-        `💰 Income: $${income.toFixed(2)}/day\n\n`;
+        `💰 Income: $${income.toFixed(2)}/hour\n\n`;
 
       buttons.push([
         {
@@ -1119,7 +1072,7 @@ async function createUserFromTelegram(
     .insert({
       whatsapp_number: phone,
       name: name,
-      balance: 10000,
+      balance: 1000,
       reserved_balance: 0,
       is_admin: false,
       telegram_user_id: telegramUserId,
@@ -1701,6 +1654,54 @@ async function startTelegramBot() {
                       inline_keyboard: keyboard,
                     },
                   });
+                } else if (action === "players" || action === "players_page") {
+                  const page = Math.max(0, Number(parts[2] ?? 0) || 0);
+                  const { players, hasPrevious, hasNext } = await getAdminPlayersPage(page);
+
+                  const listTitle = `👥 Players — Page ${page + 1}`;
+                  let msg = `${listTitle}\n\n`;
+
+                  if (!players.length) {
+                    msg += "No players found.";
+                  } else {
+                    for (const player of players) {
+                      const balance = Number(player.balance ?? 0);
+                      const reserved = Number(player.reserved_balance ?? 0);
+                      msg += `• ${player.name ?? "Unknown Player"}\n`;
+                      msg += `  ${formatAdminPlayerLabel(player)}\n`;
+                      msg += `  Balance: $${balance.toFixed(2)} | Reserved: $${reserved.toFixed(2)}\n\n`;
+                    }
+                  }
+
+                  const keyboard: unknown[][] = players.map((player) => [
+                    {
+                      text: `${player.name ?? "Unknown Player"} • $${Number(player.balance ?? 0).toFixed(2)}`,
+                      callback_data: `admin:player_details:${player.id}`,
+                    },
+                  ]);
+
+                  if (hasPrevious || hasNext) {
+                    keyboard.push([
+                      ...(hasPrevious
+                        ? [{ text: "⬅️ Prev", callback_data: `admin:players_page:${page - 1}` }]
+                        : []),
+                      ...(hasNext
+                        ? [{ text: "➡️ Next", callback_data: `admin:players_page:${page + 1}` }]
+                        : []),
+                    ]);
+                  }
+
+                  keyboard.push([
+                    { text: "🔙 Back", callback_data: "admin:back" },
+                  ]);
+
+                  await telegramRequest("sendMessage", {
+                    chat_id: callbackChatId,
+                    text: msg,
+                    reply_markup: {
+                      inline_keyboard: keyboard,
+                    },
+                  });
                 } else if (action === "player_details") {
                   const playerId = parts.slice(2).join(":");
                   const adminPlayer = await getAdminPlayerDetails(playerId);
@@ -1792,7 +1793,7 @@ async function startTelegramBot() {
                   const { data: countries, error } = await supabase
                     .from("countries")
                     .select(
-                      `id,name,code,current_price,daily_income,upgrade_level,category,market_enabled,owner:users!countries_owner_id_fkey(name)`
+                      `id,name,code,current_price,hourly_income,upgrade_level,category,market_enabled,owner:users!countries_owner_id_fkey(name)`
                     )
                     .order("name");
 
@@ -1812,7 +1813,7 @@ async function startTelegramBot() {
                         `🌍 ${c.name} (${c.code ?? "N/A"})\n` +
                         `Owner: ${owner?.name ?? "Unowned"}\n` +
                         `Current price: $${Number(c.current_price ?? 0).toFixed(2)}\n` +
-                        `Daily income: $${Number(c.daily_income ?? 0).toFixed(2)}/day\n` +
+                        `Hourly income: $${Number(c.hourly_income ?? 0).toFixed(2)}/hour\n` +
                         `Upgrade level: ${Number(c.upgrade_level ?? 0)}\n` +
                         `Category: ${c.category ?? "N/A"}\n` +
                         `Market: ${c.market_enabled === false ? "🔴 Disabled" : "🟢 Available"}\n\n`;
@@ -1833,26 +1834,9 @@ async function startTelegramBot() {
                     keyboard
                   );
                 } else if (action === "leaderboard") {
-                  await sendMessage(
-                    callbackChatId,
-                    "📊 Leaderboard\n\nSelect a leaderboard:",
-                    [
-                      [
-                        { text: "📈 Current leaderboard", callback_data: "admin:leaderboard_current" },
-                        { text: "📅 Daily leaderboard", callback_data: "admin:leaderboard_daily" },
-                      ],
-                      [{ text: "🔙 Back", callback_data: "admin:back" }],
-                    ]
-                  );
-                } else if (action === "leaderboard_current" || action === "leaderboard_daily") {
-                  const isDaily = action === "leaderboard_daily";
-                  const leaderboard = isDaily
-                    ? await getDailyLeaderboard()
-                    : await getLeaderboard();
+                  const leaderboard = await getLeaderboard();
 
-                  let msg = isDaily
-                    ? "📅 Daily Leaderboard\n\n"
-                    : "📈 Current Leaderboard\n\n";
+                  let msg = "📈 Current Leaderboard\\n\\n";
 
                   if (!leaderboard || leaderboard.length === 0) {
                     msg += "No players found.";
@@ -1864,19 +1848,14 @@ async function startTelegramBot() {
                       const score = Number(
                         player.net_worth ??
                           player.total_value ??
-                          player.daily_income ??
                           player.score ??
                           0
                       );
-                      msg += `${rank}. ${name} — $${score.toFixed(2)}\n`;
+                      msg += `${rank}. ${name} — $${score.toFixed(2)}\\n`;
                     }
                   }
 
                   await sendMessage(callbackChatId, msg, [
-                    [
-                      { text: "📈 Current", callback_data: "admin:leaderboard_current" },
-                      { text: "📅 Daily", callback_data: "admin:leaderboard_daily" },
-                    ],
                     [{ text: "🔙 Back", callback_data: "admin:back" }],
                   ]);
                 } else if (action === "back") {
@@ -1931,7 +1910,7 @@ async function startTelegramBot() {
                 await supabase
                   .from("countries")
                   .select(
-                    "id,name,current_price,daily_income,upgrade_level,owner_id,category"
+                   "id,name,current_price,hourly_income,upgrade_level,owner_id,category"
                   )
                   .eq("id", countryId)
                   .single();
@@ -2037,9 +2016,9 @@ async function startTelegramBot() {
                       `📈 New Level: ${nextLevel}\n\n` +
                       `🏗️ Building: ${building.name}\n` +
                       `💵 Cost: $${cost.toFixed(2)}\n` +
-                      `💰 Daily Income: +$${Number(
+                      `💰 Hourly Income: +$${Number(
                         building.income
-                      ).toFixed(2)}/day\n\n` +
+                      ).toFixed(2)}/hour\n\n` +
                       `Are you sure you want to upgrade?`,
                     reply_markup: {
                       inline_keyboard: [
@@ -2125,7 +2104,7 @@ async function startTelegramBot() {
                   await supabase
                     .from("countries")
                     .select(
-                      "name,current_price,daily_income,upgrade_level"
+                      "name,current_price,hourly_income,upgrade_level"
                     )
                     .eq("id", countryId)
                     .maybeSingle();
@@ -2144,8 +2123,8 @@ async function startTelegramBot() {
                     country?.current_price ?? 0
                   ).toFixed(2)}\n` +
                   `💰 New Income: $${Number(
-                    country?.daily_income ?? 0
-                  ).toFixed(2)}/day\n\n` +
+                    country?.hourly_income ?? 0
+                  ).toFixed(2)}/hour\n\n` +
                   `🏗️ Your country has been upgraded successfully.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
@@ -2287,7 +2266,7 @@ async function startTelegramBot() {
                 Number(country.current_price);
 
               const income =
-                getCountryDailyIncome(country);
+                getCountryHourlyIncome(country);
 
               const level =
                 Number(country.upgrade_level);
@@ -2301,7 +2280,7 @@ async function startTelegramBot() {
                 `${code} ${country.name}\n` +
                 `💵 Price: $${price.toFixed(2)}\n` +
                 `📈 Level: ${level}\n` +
-                `💰 Income: $${income.toFixed(2)}/day\n\n`;
+                `💰 Income: $${income.toFixed(2)}/hour\n\n`;
 
               buttons.push([
                 {
@@ -2367,7 +2346,7 @@ async function startTelegramBot() {
                 await supabase
                   .from("countries")
                   .select(
-                    "id,name,code,current_price,daily_income,upgrade_level,category"
+                    "id,name,code,current_price,hourly_income,upgrade_level,category"
                   )
                   .eq("id", countryId)
                   .single();
@@ -2393,7 +2372,7 @@ async function startTelegramBot() {
                       `🛒 ${country.name}\n\n` +
                       `💵 Price: $${Number(country.current_price).toFixed(2)}\n` +
                       `📈 Level: ${Number(country.upgrade_level)}\n` +
-                      `💰 Income: $${getCountryDailyIncome(country).toFixed(2)}/day\n\n` +
+                      `💰 Income: $${getCountryHourlyIncome(country).toFixed(2)}/hour\n\n` +
                       `Are you sure you want to buy ${country.name}?`,
                     reply_markup: {
                       inline_keyboard: [
@@ -2458,7 +2437,7 @@ async function startTelegramBot() {
                   await supabase
                     .from("countries")
                     .select(
-                      "name,current_price,daily_income,category,upgrade_level"
+                      "name,current_price,hourly_income,category,upgrade_level"
                     )
                     .eq("id", countryId)
                     .maybeSingle();
@@ -2477,8 +2456,8 @@ async function startTelegramBot() {
                   `🌍 ${countryName}\n` +
                   `💵 Purchase price: $${price.toFixed(2)}\n` +
                   `📈 Level: ${Number(country?.upgrade_level ?? 0)}\n` +
-                  `💰 Daily income: $${getCountryDailyIncome(country ?? {}).toFixed(2)}/day\n\n` +
-                  `You now own this country and will receive its daily income.`,
+                  `💰 Hourly income: $${getCountryHourlyIncome(country ?? {}).toFixed(2)}/hour\n\n` +
+                  `You now own this country and will receive hourly income.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2544,7 +2523,7 @@ async function startTelegramBot() {
                 await supabase
                   .from("countries")
                   .select(
-                    "id,name,current_price,daily_income,upgrade_level,owner_id,category"
+                    "id,name,current_price,hourly_income,upgrade_level,owner_id,category"
                   )
                   .eq("id", countryId)
                   .single();
@@ -2600,7 +2579,7 @@ async function startTelegramBot() {
                       `📈 Level: ${Number(
                         country.upgrade_level
                       )}\n` +
-                      `💰 Income: $${getCountryDailyIncome(country).toFixed(2)}/day\n\n` +
+                      `💰 Income: $${getCountryHourlyIncome(country).toFixed(2)}/hour\n\n` +
                       `Are you sure you want to sell this country?`,
                     reply_markup: {
                       inline_keyboard: [
@@ -4032,9 +4011,9 @@ async function startTelegramBot() {
                 `💵 Cost: $${Number(
                   building.cost
                 ).toFixed(2)}\n` +
-                `💰 Daily Income: +$${Number(
+                `💰 Hourly Income: +$${Number(
                   building.income
-                ).toFixed(2)}/day\n\n`;
+                ).toFixed(2)}/hour\n\n`;
 
               buttons.push([
                 {
@@ -4173,7 +4152,7 @@ async function startTelegramBot() {
           let message =
             "🌍 MY COUNTRIES\n\n";
 
-          let totalDailyIncome = 0;
+          let totalHourlyIncome = 0;
           let totalValue = 0;
 
           const buttons: unknown[][] = [];
@@ -4183,13 +4162,13 @@ async function startTelegramBot() {
               Number(country.current_price);
 
             const income =
-              getCountryDailyIncome(country);
+              getCountryHourlyIncome(country);
 
             const level =
               Number(country.upgrade_level);
 
             totalValue += price;
-            totalDailyIncome += income;
+            totalHourlyIncome += income;
 
             const flag =
               country.code
@@ -4200,7 +4179,7 @@ async function startTelegramBot() {
               `${flag} ${country.name}\n` +
               `💵 Value: $${price.toFixed(2)}\n` +
               `📈 Level: ${level}\n` +
-              `💰 Income: $${income.toFixed(2)}/day\n\n`;
+              `💰 Income: $${income.toFixed(2)}/hour\n\n`;
 
             if (level > 0) {
               buttons.push([
@@ -4222,7 +4201,7 @@ async function startTelegramBot() {
             "━━━━━━━━━━━━━━\n" +
             `🌍 Countries: ${countries.length}\n` +
             `💵 Total value: $${totalValue.toFixed(2)}\n` +
-            `💰 Daily income: $${totalDailyIncome.toFixed(2)}`;
+            `💰 Hourly income: $${totalHourlyIncome.toFixed(2)}`;
 
           await telegramRequest(
             "sendMessage",

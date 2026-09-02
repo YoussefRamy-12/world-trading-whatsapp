@@ -68,25 +68,25 @@ export async function getPlayer(whatsappNumber: string) {
 
 const COUNTRY_BUILDING_CONFIG = {
   silver: {
-    1: { name: "Ministry of Defense", cost: 100, income: 25 },
-    2: { name: "Army Base", cost: 75, income: 15 },
-    3: { name: "Missile Base", cost: 100, income: 20 },
-    4: { name: "Air Force Base", cost: 75, income: 15 },
-    5: { name: "Naval Fleet", cost: 100, income: 20 },
+    1: { name: "Ministry of Defense", cost: 75, income: 10 },
+    2: { name: "Army Base", cost: 100, income: 15 },
+    3: { name: "Tank Factory", cost: 150, income: 25 },
+    4: { name: "Military Academy", cost: 200, income: 35 },
+    5: { name: "National Arms Industry", cost: 300, income: 50 },
   },
   gold: {
-    1: { name: "Ministry of Defense", cost: 150, income: 35 },
-    2: { name: "Army Base", cost: 125, income: 25 },
-    3: { name: "Missile Base", cost: 150, income: 30 },
-    4: { name: "Air Force Base", cost: 125, income: 25 },
-    5: { name: "Naval Fleet", cost: 150, income: 25 },
+    1: { name: "Military HQ", cost: 125, income: 15 },
+    2: { name: "Army & Air Base", cost: 175, income: 25 },
+    3: { name: "Defense Industry", cost: 250, income: 40 },
+    4: { name: "Advanced Military Academy", cost: 325, income: 60 },
+    5: { name: "Integrated Defense Complex", cost: 500, income: 90 },
   },
   platinum: {
-    1: { name: "Ministry of Defense", cost: 200, income: 45 },
-    2: { name: "Army Base", cost: 175, income: 35 },
-    3: { name: "Missile Base", cost: 200, income: 40 },
-    4: { name: "Air Force Base", cost: 175, income: 35 },
-    5: { name: "Naval Fleet", cost: 200, income: 40 },
+    1: { name: "Strategic Command Center", cost: 200, income: 25 },
+    2: { name: "Joint Military Base", cost: 300, income: 40 },
+    3: { name: "Defense & Weapons Industry", cost: 450, income: 60 },
+    4: { name: "National Defense Academy", cost: 600, income: 90 },
+    5: { name: "Strategic Defense Complex", cost: 900, income: 130 },
   },
 } as const;
 
@@ -107,40 +107,17 @@ async function assertPlayerActive(playerId: string) {
 }
 
 export function getCountryHourlyIncome(country: {
-  base_daily_income?: number | string | null;
+  hourly_income?: number | string | null;
   daily_income?: number | string | null;
   category?: string | null;
   upgrade_level?: number | string | null;
 }) {
-  const currentLevel = Number(country.upgrade_level ?? 0);
-  const category = normalizeCountryCategory(country.category);
-  const buildingConfig =
-    COUNTRY_BUILDING_CONFIG[
-      category as keyof typeof COUNTRY_BUILDING_CONFIG
-    ] ?? COUNTRY_BUILDING_CONFIG.silver;
-
-  let baseIncome = Number(
-    country.base_daily_income ??
-      country.daily_income ??
-      0
-  );
-
-  let completedBuildingIncome = 0;
-
-  for (let level = 1; level <= currentLevel; level += 1) {
-    completedBuildingIncome += Number(
-      buildingConfig[level as keyof typeof buildingConfig]?.income ?? 0
-    );
-  }
-
-  if (baseIncome <= 0 && country.daily_income !== undefined) {
-    baseIncome =
-      Number(country.daily_income ?? 0) - completedBuildingIncome;
-  }
-
-  return Math.max(0, baseIncome + completedBuildingIncome) / 24;
+  // The authoritative hourly income is stored in countries.hourly_income.
+  // Fall back to daily_income for compatibility if hourly_income is not present.
+  return Number(country.hourly_income ?? country.daily_income ?? 0);
 }
 
+// Keep a compatibility alias but ensure it returns hourly income value.
 export const getCountryDailyIncome = getCountryHourlyIncome;
 
 function getCairoPeriodKey(date: Date, mode: "daily" | "hourly") {
@@ -205,108 +182,22 @@ function getMissedPayoutCount(
 }
 
 export async function collectPlayerIncome(playerId: string) {
-  const { data: countries, error } = await supabase
-    .from("countries")
-    .select("*")
-    .eq("owner_id", playerId);
+  // Delegate income collection to the authoritative database RPC.
+  const { data, error } = await supabase.rpc("collect_player_hourly_income", {
+    p_player_id: playerId,
+  });
 
   if (error) {
     throw error;
   }
 
-  if (!countries || countries.length === 0) {
-    return {
-      income: 0,
-      countries: [],
-    };
-  }
-
-  const now = new Date();
-  let totalIncome = 0;
-  const incomeDetails = [];
-
-  for (const country of countries) {
-    if (!country.owner_id || !country.owned_since) {
-      continue;
-    }
-
-    const hourlyIncome = getCountryHourlyIncome(country);
-
-    if (hourlyIncome <= 0) {
-      continue;
-    }
-
-    const lastPaidAt = country.hourly_income_last_paid_at ?? country.daily_income_last_paid_at
-      ? new Date(country.hourly_income_last_paid_at ?? country.daily_income_last_paid_at)
-      : new Date(country.owned_since);
-
-    const missedPeriods = getMissedPayoutCount(lastPaidAt, now, "hourly");
-
-    if (missedPeriods <= 0) {
-      continue;
-    }
-
-    const income = hourlyIncome * missedPeriods;
-
-    totalIncome += income;
-
-    incomeDetails.push({
-      country: country.name,
-      periods: missedPeriods,
-      income,
-    });
-
-    await supabase
-      .from("countries")
-      .update({
-        daily_income: hourlyIncome * 24,
-        daily_income_last_paid_at: now.toISOString(),
-        hourly_income_last_paid_at: now.toISOString(),
-      })
-      .eq("id", country.id);
-  }
-
-  if (totalIncome > 0) {
-    const { data: player, error: playerError } = await supabase
-      .from("users")
-      .select("balance")
-      .eq("id", playerId)
-      .single();
-
-    if (playerError) {
-      throw playerError;
-    }
-
-    const newBalance = Number(player.balance) + totalIncome;
-
-    const { error: updateError } = await supabase
-      .from("users")
-      .update({
-        balance: newBalance,
-      })
-      .eq("id", playerId);
-
-    if (updateError) {
-      throw updateError;
-    }
-
-    const { error: transactionError } = await supabase
-      .from("transactions")
-      .insert({
-        user_id: playerId,
-        type: "hourly_income",
-        amount: totalIncome,
-        description: "Country hourly income",
-      });
-
-    if (transactionError) {
-      throw transactionError;
-    }
-  }
+  // supabase.rpc typically returns an array of rows for TABLE results;
+  // the migration returns a single row with total_income and details.
+  const row = Array.isArray(data) ? data[0] : data;
 
   return {
-    income: totalIncome,
-    countries: incomeDetails,
+    income: Number(row?.total_income ?? 0),
+    countries: row?.details ?? [],
   };
 }
 
@@ -314,7 +205,7 @@ async function getCountryById(countryId: string) {
   const { data, error } = await supabase
     .from("countries")
     .select(
-      "id,name,code,base_price,current_price,daily_income,owner_id,owned_since,upgrade_level,category,market_enabled"
+      "id,name,code,base_price,current_price,daily_income,hourly_income,hourly_income_last_paid_at,owner_id,owned_since,upgrade_level,category,market_enabled"
     )
     .eq("id", countryId)
     .maybeSingle();
@@ -399,6 +290,7 @@ export async function sellCountry(
   await assertCountryTradeAllowed(countryId, {
     requireOwner: true,
     ownerId: playerId,
+    allowLevelZero: true,
   });
 
   const { data, error } = await supabase.rpc(
@@ -552,6 +444,7 @@ export async function getLeaderboard() {
   return data;
 }
 
+
 export async function getDailyLeaderboard(
   date?: string
 ) {
@@ -680,7 +573,7 @@ export async function adminUpdateCountry(
     p_reason: reason,
   } as const;
 
-  let result = await supabase.rpc(
+  const result = await supabase.rpc(
     "admin_update_country",
     {
       ...baseArgs,
@@ -689,19 +582,7 @@ export async function adminUpdateCountry(
   );
 
   if (result.error) {
-    const fallbackResult = await supabase.rpc(
-      "admin_update_country",
-      {
-        ...baseArgs,
-        p_daily_income: hourlyIncome,
-      }
-    );
-
-    if (fallbackResult.error) {
-      throw fallbackResult.error;
-    }
-
-    result = fallbackResult;
+    throw result.error;
   }
 
   return result.data;
