@@ -237,7 +237,7 @@ function formatAdminPlayerLabel(player: {
   telegram_user_id?: number | string | null;
   whatsapp_number?: string | null;
 }) {
-  const name = player.name?.trim() || "لاعب غير معروف";
+  const name = player.name?.trim() || "Unknown Player";
   const telegram = player.telegram_username
     ? `@${player.telegram_username}`
     : player.telegram_user_id !== null && player.telegram_user_id !== undefined
@@ -281,8 +281,8 @@ async function getAdminPlayersPage(page = 0, pageSize = 8) {
   return {
     players,
     page: safePage,
-    hasالسابق: safePage > 0,
-    hasالتالي: players.length === pageSize,
+    hasPrevious: safePage > 0,
+    hasNext: players.length === pageSize,
   };
 }
 
@@ -663,7 +663,7 @@ async function sendMarketPage(
   const playerStart =
     playerPage * pageSize;
 
-  const pageمتاحCountries =
+  const pageAvailableCountries =
     availableCountries.slice(
       availableStart,
       availableStart + pageSize
@@ -676,7 +676,7 @@ async function sendMarketPage(
     );
 
   let marketMessage =
-    "🏪 السوق\n\n";
+    "🏪 MARKET\n\n";
 
   const buttons: unknown[][] = [];
 
@@ -687,7 +687,7 @@ async function sendMarketPage(
    */
 
   marketMessage +=
-    "🟢 البلاد المتاحة\n\n";
+    "🟢 AVAILABLE COUNTRIES\n\n";
 
   if (
     availableCountries.length === 0
@@ -696,7 +696,7 @@ async function sendMarketPage(
       "لا توجد بلاد متاحة للشراء حاليًا.\n\n";
   } else {
     for (
-      const country of pageمتاحCountries
+      const country of pageAvailableCountries
     ) {
       const price =
         Number(country.current_price);
@@ -708,15 +708,15 @@ async function sendMarketPage(
       const code = country.code ? `🌐 ${country.code}` : "🌍";
 
       marketMessage +=
-        `${formatCountryNameForTelegram(country.name)}\n` +
+        `${code} ${country.name}\n` +
         `💵 السعر: $${price.toFixed(2)}\n` +
         `📈 المستوى: ${level}\n` +
-        `💰 الدخل: $${income.toFixed(2)}/ساعة\n\n`;
+        `💰 الدخل: $${income.toFixed(2)}/hour\n\n`;
 
       buttons.push([
         {
           text:
-            `🛒 شراء ${formatCountryNameForTelegram(country.name)}`,
+            `🛒 Buy ${country.name}`,
           callback_data:
             `buy_country:${country.id}`,
         },
@@ -724,7 +724,7 @@ async function sendMarketPage(
     }
 
     /*
-     * متاح countries pagination
+     * Available countries pagination
      */
 
     if (availableTotalPages > 1) {
@@ -772,7 +772,7 @@ async function sendMarketPage(
    */
 
   marketMessage +=
-    "🤝 بلاد اللاعبين\n\n";
+    "🤝 PLAYER COUNTRIES\n\n";
 
   if (
     playerCountries.length === 0
@@ -800,16 +800,16 @@ async function sendMarketPage(
       const ownerName = Array.isArray(ownerData) ? ownerData[0]?.name : ownerData?.name;
 
       marketMessage +=
-        `${formatCountryNameForTelegram(country.name)}\n` +
+        `${code} ${country.name}\n` +
         `👤 المالك: ${ownerName ?? "غير معروف"}\n` +
         `💵 القيمة: $${price.toFixed(2)}\n` +
         `📈 المستوى: ${level}\n` +
-        `💰 الدخل: $${income.toFixed(2)}/ساعة\n\n`;
+        `💰 الدخل: $${income.toFixed(2)}/hour\n\n`;
 
       buttons.push([
         {
           text:
-            `💰 تقديم عرض — ${formatCountryNameForTelegram(country.name)}`,
+            `💰 Make Offer — ${country.name}`,
           callback_data:
             `make_offer:${country.id}`,
         },
@@ -1231,7 +1231,7 @@ function getUserFriendlyGameError(error: unknown): string {
       return '❌ You can only cancel your own offers.';
 
     default:
-      return '❌ Something went wrong. حاول مرة أخرى.';
+      return '❌ Something went wrong. Please try again.';
   }
 }
 
@@ -1379,7 +1379,7 @@ async function startTelegramBot() {
               if (callbackChatId !== undefined) {
                 await sendMessage(
                   callbackChatId,
-                  "❌ غير مسموح لك بتنفيذ هذا الإجراء.",
+                  "❌ You are not authorized to perform this action.",
                   await mainMenuForTelegramUser(
                     callbackTelegramUserId
                   )
@@ -1425,7 +1425,7 @@ async function startTelegramBot() {
                   if (!admin?.id) throw new Error("ADMIN_NOT_FOUND");
 
                   const settings = pending.kind === "market_enabled"
-                   ? { marketتفعيلd: pending.value as boolean }
+                   ? { marketEnabled: pending.value as boolean }
                    : pending.kind === "offer_duration_minutes"
                      ? { offerDurationMinutes: pending.value as number }
                      : pending.kind === "min_price_percent"
@@ -1463,14 +1463,14 @@ async function startTelegramBot() {
                     continue;
                   }
                   const description = action === "settings_market"
-                    ? `السوق: ${parsedValue ? "🟢 مفعل" : "🔴 متوقف"}`
+                    ? `Market: ${parsedValue ? "ON" : "OFF"}`
                     : action === "settings_duration"
-                      ? `مدة العرض: ${parsedValue} دقيقة`
+                      ? `Offer duration: ${parsedValue} minutes`
                       : action === "settings_starting_balance"
-                        ? `الرصيد الابتدائي: $${Number(parsedValue).toFixed(2)}`
+                        ? `Starting balance: $${Number(parsedValue).toFixed(2)}`
                         : action === "settings_game"
-                          ? `اللعبة: ${parsedValue ? "🟢 نشطة" : "🔴 متوقفة"}`
-                          : `${action === "settings_min_price" ? "الحد الأدنى" : "الحد الأقصى"} للسعر: ${(Number(parsedValue) * 100).toFixed(0)}%`;
+                          ? `Game: ${parsedValue ? "ACTIVE" : "INACTIVE"}`
+                          : `${action === "settings_min_price" ? "Minimum" : "Maximum"} price: ${(Number(parsedValue) * 100).toFixed(0)}%`;
                   pendingAdminSettingsChanges.set(callbackTelegramUserId, {
                     kind: action === "settings_market" ? "market_enabled" : action === "settings_duration" ? "offer_duration_minutes" : action === "settings_min_price" ? "min_price_percent" : action === "settings_max_price" ? "max_price_percent" : action === "settings_game" ? "game_active" : "starting_balance",
                     value: parsedValue,
@@ -1527,11 +1527,11 @@ async function startTelegramBot() {
                     kind: "country_market",
                     id: countryId,
                     enabled,
-                    description: `إتاحة البلد في السوق: ${enabled ? "مفعلة" : "متوقفة"}`,
+                    description: `Country market availability ${enabled ? "enabled" : "disabled"}`,
                   });
                   await telegramRequest("sendMessage", {
                     chat_id: callbackChatId,
-                    text: `⚠️ تأكيد التغيير\n\n${enabled ? "تفعيل" : "إيقاف"} this country in the market?`,
+                    text: `⚠️ تأكيد التغيير\n\n${enabled ? "Enable" : "Disable"} this country in the market?`,
                     reply_markup: {
                       inline_keyboard: [[
                         { text: "✅ تأكيد", callback_data: "admin:status_confirm" },
@@ -1548,11 +1548,11 @@ async function startTelegramBot() {
                     kind: "player_active",
                     id: playerId,
                     enabled,
-                    description: `اللاعب: ${enabled ? "تفعيل" : "إيقاف"}`,
+                    description: `Player ${enabled ? "enable" : "disable"}`,
                   });
                   await telegramRequest("sendMessage", {
                     chat_id: callbackChatId,
-                    text: `⚠️ تأكيد التغيير\n\n${enabled ? "تفعيل" : "إيقاف"} this player?`,
+                    text: `⚠️ تأكيد التغيير\n\n${enabled ? "Enable" : "Disable"} this player?`,
                     reply_markup: {
                       inline_keyboard: [[
                         { text: "✅ تأكيد", callback_data: "admin:status_confirm" },
@@ -1572,7 +1572,7 @@ async function startTelegramBot() {
                     await editMessage(
                       callbackChatId,
                       callbackMessageId!,
-                      "❌ تعديل الرصيد ده لم يعد متاحًا."
+                      "❌ This balance adjustment is no longer available."
                     );
                     continue;
                   }
@@ -1600,7 +1600,7 @@ async function startTelegramBot() {
                       await editMessage(
                         callbackChatId,
                         callbackMessageId!,
-                        `❌ تم إلغاء تعديل الرصيد.\n\nالرصيد الناتج سيكون بالسالب: $${resultingBalance.toFixed(2)}.`
+                        `❌ Balance adjustment cancelled.\n\nThe resulting balance would be negative: $${resultingBalance.toFixed(2)}.`
                       );
                       continue;
                     }
@@ -1617,11 +1617,11 @@ async function startTelegramBot() {
                     await editMessage(
                       callbackChatId,
                       callbackMessageId!,
-                      `✅ تم تعديل الرصيد بنجاح.\n\n` +
-                        `اللاعب: ${pending.playerName}\n` +
+                      `✅ Balance adjusted successfully.\n\n` +
+                        `Player: ${pending.playerName}\n` +
                         `Amount: $${pending.amount.toFixed(2)}\n` +
                         `New balance: $${resultingBalance.toFixed(2)}\n` +
-                        `السبب: ${pending.reason}\n\n${result ?? ""}`.trim()
+                        `Reason: ${pending.reason}\n\n${result ?? ""}`.trim()
                     );
                   } catch (error) {
                     console.error("Admin balance confirmation error:", error);
@@ -1629,7 +1629,7 @@ async function startTelegramBot() {
                     await editMessage(
                       callbackChatId,
                       callbackMessageId!,
-                      "❌ فشل تحديث الرصيد. حاول مرة أخرى."
+                      "❌ The balance update failed. Please try again."
                     );
                   }
                 } else if (action === "cancel_balance_adjust") {
@@ -1637,21 +1637,21 @@ async function startTelegramBot() {
                   await editMessage(
                     callbackChatId,
                     callbackMessageId!,
-                    "❌ تم إلغاء تعديل الرصيد."
+                    "❌ Balance adjustment cancelled."
                   );
                   const page = Math.max(0, Number(parts[2] ?? 0) || 0);
-                  const { players, hasالسابق, hasالتالي } = await getAdminPlayersPage(page);
+                  const { players, hasPrevious, hasNext } = await getAdminPlayersPage(page);
 
-                  const listTitle = `👥 اللاعبين — الصفحة ${page + 1}`;
+                  const listTitle = `👥 اللاعبين — Page ${page + 1}`;
                   let msg = `${listTitle}\n\n`;
 
                   if (!players.length) {
-                    msg += "لم يتم العثور على لاعبين.";
+                    msg += "No players found.";
                   } else {
                     for (const player of players) {
                       const balance = Number(player.balance ?? 0);
                       const reserved = Number(player.reserved_balance ?? 0);
-                      msg += `• ${player.name ?? "لاعب غير معروف"}\n`;
+                      msg += `• ${player.name ?? "Unknown Player"}\n`;
                       msg += `  ${formatAdminPlayerLabel(player)}\n`;
                       msg += `  Balance: $${balance.toFixed(2)} | المحجوز: $${reserved.toFixed(2)}\n\n`;
                     }
@@ -1659,18 +1659,18 @@ async function startTelegramBot() {
 
                   const keyboard: unknown[][] = players.map((player) => [
                     {
-                      text: `${player.name ?? "لاعب غير معروف"} • $${Number(player.balance ?? 0).toFixed(2)}`,
+                      text: `${player.name ?? "Unknown Player"} • $${Number(player.balance ?? 0).toFixed(2)}`,
                       callback_data: `admin:player_details:${player.id}`,
                     },
                   ]);
 
-                  if (hasالسابق || hasالتالي) {
+                  if (hasPrevious || hasNext) {
                     keyboard.push([
-                      ...(hasالسابق
-                        ? [{ text: "⬅️ السابق", callback_data: `admin:players_page:${page - 1}` }]
+                      ...(hasPrevious
+                        ? [{ text: "⬅️ Prev", callback_data: `admin:players_page:${page - 1}` }]
                         : []),
-                      ...(hasالتالي
-                        ? [{ text: "➡️ التالي", callback_data: `admin:players_page:${page + 1}` }]
+                      ...(hasNext
+                        ? [{ text: "➡️ Next", callback_data: `admin:players_page:${page + 1}` }]
                         : []),
                     ]);
                   }
@@ -1688,18 +1688,18 @@ async function startTelegramBot() {
                   });
                 } else if (action === "players" || action === "players_page") {
                   const page = Math.max(0, Number(parts[2] ?? 0) || 0);
-                  const { players, hasالسابق, hasالتالي } = await getAdminPlayersPage(page);
+                  const { players, hasPrevious, hasNext } = await getAdminPlayersPage(page);
 
-                  const listTitle = `👥 اللاعبين — الصفحة ${page + 1}`;
+                  const listTitle = `👥 اللاعبين — Page ${page + 1}`;
                   let msg = `${listTitle}\n\n`;
 
                   if (!players.length) {
-                    msg += "لم يتم العثور على لاعبين.";
+                    msg += "No players found.";
                   } else {
                     for (const player of players) {
                       const balance = Number(player.balance ?? 0);
                       const reserved = Number(player.reserved_balance ?? 0);
-                      msg += `• ${player.name ?? "لاعب غير معروف"}\n`;
+                      msg += `• ${player.name ?? "Unknown Player"}\n`;
                       msg += `  ${formatAdminPlayerLabel(player)}\n`;
                       msg += `  Balance: $${balance.toFixed(2)} | المحجوز: $${reserved.toFixed(2)}\n\n`;
                     }
@@ -1707,18 +1707,18 @@ async function startTelegramBot() {
 
                   const keyboard: unknown[][] = players.map((player) => [
                     {
-                      text: `${player.name ?? "لاعب غير معروف"} • $${Number(player.balance ?? 0).toFixed(2)}`,
+                      text: `${player.name ?? "Unknown Player"} • $${Number(player.balance ?? 0).toFixed(2)}`,
                       callback_data: `admin:player_details:${player.id}`,
                     },
                   ]);
 
-                  if (hasالسابق || hasالتالي) {
+                  if (hasPrevious || hasNext) {
                     keyboard.push([
-                      ...(hasالسابق
-                        ? [{ text: "⬅️ السابق", callback_data: `admin:players_page:${page - 1}` }]
+                      ...(hasPrevious
+                        ? [{ text: "⬅️ Prev", callback_data: `admin:players_page:${page - 1}` }]
                         : []),
-                      ...(hasالتالي
-                        ? [{ text: "➡️ التالي", callback_data: `admin:players_page:${page + 1}` }]
+                      ...(hasNext
+                        ? [{ text: "➡️ Next", callback_data: `admin:players_page:${page + 1}` }]
                         : []),
                     ]);
                   }
@@ -1741,7 +1741,7 @@ async function startTelegramBot() {
                   if (!adminPlayer) {
                     await telegramRequest("sendMessage", {
                       chat_id: callbackChatId,
-                      text: "❌ لم يتم العثور على اللاعب.",
+                      text: "❌ Player not found.",
                       reply_markup: {
                         inline_keyboard: [[{ text: "👥 اللاعبين", callback_data: "admin:players" }]],
                       },
@@ -1753,14 +1753,14 @@ async function startTelegramBot() {
                   const balance = Number(player.balance ?? 0);
                   const reserved = Number(player.reserved_balance ?? 0);
 
-                  let countryText = "لا توجد بلاد مملوكة.";
+                  let countryText = "No countries owned.";
 
                   if (countries.length > 0) {
                     countryText = countries
                       .map((country) => {
                         const value = Number(country.current_price ?? 0);
                         const level = Number(country.upgrade_level ?? 0);
-                        return `• ${formatCountryNameForTelegram(country.name)} — $${value.toFixed(2)} — المستوى ${level}`;
+                        return `• ${country.name} (${country.code ?? "N/A"}) — $${value.toFixed(2)} — Level ${level}`;
                       })
                       .join("\n");
                   }
@@ -1768,17 +1768,17 @@ async function startTelegramBot() {
                   await telegramRequest("sendMessage", {
                     chat_id: callbackChatId,
                     text:
-                      `👤 ${player.name ?? "لاعب غير معروف"}\n` +
-                      `Telegram: ${player.telegram_username ? `@${player.telegram_username}` : player.telegram_user_id ? `TG:${player.telegram_user_id}` : "غير مرتبط"}\n` +
-                      `WhatsApp: ${player.whatsapp_number ? (() => { const digits = String(player.whatsapp_number).replace(/\D/g, ""); return digits.length <= 4 ? `••${digits.slice(-2)}` : `${digits.slice(0, 2)}******${digits.slice(-2)}`; })() : "غير مرتبط"}\n` +
+                      `👤 ${player.name ?? "Unknown Player"}\n` +
+                      `Telegram: ${player.telegram_username ? `@${player.telegram_username}` : player.telegram_user_id ? `TG:${player.telegram_user_id}` : "Not linked"}\n` +
+                      `WhatsApp: ${player.whatsapp_number ? (() => { const digits = String(player.whatsapp_number).replace(/\D/g, ""); return digits.length <= 4 ? `••${digits.slice(-2)}` : `${digits.slice(0, 2)}******${digits.slice(-2)}`; })() : "Not linked"}\n` +
                       `Balance: $${balance.toFixed(2)}\n` +
                       `المحجوز: $${reserved.toFixed(2)}\n\n` +
-                      `🏝 البلاد المملوكة\n${countryText}`,
+                      `🏝 Owned Countries\n${countryText}`,
                     reply_markup: {
                       inline_keyboard: [
-                        [{ text: "💰 تعديل الرصيد", callback_data: `admin:adjust_balance_player:${player.id}` }],
-                        [{ text: player.is_active === false ? "🟢 تفعيل اللاعب" : "🔴 إيقاف اللاعب", callback_data: `admin:player_active:${player.id}:${player.is_active === false ? "on" : "off"}` }],
-                        [{ text: "👥 الرجوع إلى اللاعبين", callback_data: "admin:players" }],
+                        [{ text: "💰 Adjust Balance", callback_data: `admin:adjust_balance_player:${player.id}` }],
+                        [{ text: player.is_active === false ? "🟢 Enable Player" : "🔴 Disable Player", callback_data: `admin:player_active:${player.id}:${player.is_active === false ? "on" : "off"}` }],
+                        [{ text: "👥 Back to Players", callback_data: "admin:players" }],
                         [{ text: "🔙 رجوع", callback_data: "admin:back" }],
                       ],
                     },
@@ -1794,7 +1794,7 @@ async function startTelegramBot() {
                   if (targetPlayerError || !targetPlayer) {
                     await sendMessage(
                       callbackChatId,
-                      "❌ لم يتم العثور على اللاعب.",
+                      "❌ Player not found.",
                       await mainMenuForTelegramUser(callbackTelegramUserId)
                     );
                     continue;
@@ -1803,20 +1803,20 @@ async function startTelegramBot() {
                   clearPendingAdminState(callbackTelegramUserId);
                   pendingAdminBalanceAdjustments.set(callbackTelegramUserId, {
                     targetUserId: targetPlayer.id,
-                    playerName: targetPlayer.name ?? "لاعب غير معروف",
+                    playerName: targetPlayer.name ?? "Unknown Player",
                     currentBalance: Number(targetPlayer.balance ?? 0),
                     step: "amount",
                   });
 
                   await sendMessage(
                     callbackChatId,
-                    `💰 تعديل الرصيد\n\nPlayer: ${targetPlayer.name ?? "لاعب غير معروف"}\nCurrent balance: $${Number(targetPlayer.balance ?? 0).toFixed(2)}\n\nEnter the amount to add or remove (example: 250 or -250):\nSend /cancel to cancel.`,
+                    `💰 Adjust Balance\n\nPlayer: ${targetPlayer.name ?? "Unknown Player"}\nCurrent balance: $${Number(targetPlayer.balance ?? 0).toFixed(2)}\n\nEnter the amount to add or remove (example: 250 or -250):\nSend /cancel to cancel.`,
                     await mainMenuForTelegramUser(callbackTelegramUserId)
                   );
                 } else if (action === "adjust_balance") {
                   await sendMessage(
                     callbackChatId,
-                    "💰 تعديل الرصيد\n\nUse a player detail screen to pick the target player.",
+                    "💰 Adjust Balance\n\nUse a player detail screen to pick the target player.",
                     await mainMenuForTelegramUser(
                       callbackTelegramUserId
                     )
@@ -1842,16 +1842,16 @@ async function startTelegramBot() {
                     for (const c of countries) {
                       const owner = Array.isArray(c.owner) ? c.owner[0] : c.owner;
                       msg +=
-                        `🌍 ${formatCountryNameForTelegram(c.name, c.code)}\n` +
-                        `المالك: ${owner?.name ?? "غير مملوك"}\n` +
-                        `السعر الحالي: $${Number(c.current_price ?? 0).toFixed(2)}\n` +
-                        `الدخل بالساعة: $${Number(c.hourly_income ?? 0).toFixed(2)}/ساعة\n` +
-                        `مستوى التطوير: ${Number(c.upgrade_level ?? 0)}\n` +
-                        `الفئة: ${c.category ?? "N/A"}\n` +
-                        `Market: ${c.market_enabled === false ? "🔴 متوقف" : "🟢 متاح"}\n\n`;
+                        `🌍 ${c.name} (${c.code ?? "N/A"})\n` +
+                        `Owner: ${owner?.name ?? "Unowned"}\n` +
+                        `Current price: $${Number(c.current_price ?? 0).toFixed(2)}\n` +
+                        `Hourly income: $${Number(c.hourly_income ?? 0).toFixed(2)}/hour\n` +
+                        `Upgrade level: ${Number(c.upgrade_level ?? 0)}\n` +
+                        `Category: ${c.category ?? "N/A"}\n` +
+                        `Market: ${c.market_enabled === false ? "🔴 Disabled" : "🟢 Available"}\n\n`;
                       keyboard.push([
                         {
-                          text: c.market_enabled === false ? "🟢 تفعيل السوق" : "🔴 إيقاف السوق",
+                          text: c.market_enabled === false ? "🟢 Enable Market" : "🔴 Disable Market",
                           callback_data: `admin:country_market_toggle:${c.id}:${c.market_enabled === false ? "on" : "off"}`,
                         },
                       ]);
@@ -1868,10 +1868,10 @@ async function startTelegramBot() {
                 } else if (action === "leaderboard") {
                   const leaderboard = await getLeaderboard();
 
-                  let msg = "📈 المتصدرون الحاليون\\n\\n";
+                  let msg = "📈 Current Leaderboard\\n\\n";
 
                   if (!leaderboard || leaderboard.length === 0) {
-                    msg += "لم يتم العثور على لاعبين.";
+                    msg += "No players found.";
                   } else {
                     for (let i = 0; i < Math.min(10, leaderboard.length); i++) {
                       const player = leaderboard[i];
@@ -1902,7 +1902,7 @@ async function startTelegramBot() {
                 } else {
                   await sendMessage(
                     callbackChatId,
-                    "❌ إجراء إداري غير مدعوم.",
+                    "❌ Unsupported admin action.",
                     await mainMenuForTelegramUser(callbackTelegramUserId)
                   );
                 }
@@ -1916,7 +1916,7 @@ async function startTelegramBot() {
                 }
                 await sendMessage(
                   callbackChatId,
-                  "❌ فشل تنفيذ إجراء الإدارة.",
+                  "❌ Admin action failed.",
                   await mainMenuForTelegramUser(
                     callbackTelegramUserId
                   )
@@ -1972,7 +1972,7 @@ async function startTelegramBot() {
               if (country.owner_id !== player.id) {
                 await answerCallbackQuery(
                   callbackQuery.id,
-                  "❌ أنت لا تملك هذا البلد."
+                  "❌ You don't own this country."
                 );
 
                 continue;
@@ -2014,7 +2014,7 @@ async function startTelegramBot() {
               if (available < cost) {
                 await answerCallbackQuery(
                   callbackQuery.id,
-                  "❌ الرصيد المتاح غير كافٍ."
+                  "❌ Not enough available balance."
                 );
 
                 if (callbackChatId !== undefined) {
@@ -2022,7 +2022,7 @@ async function startTelegramBot() {
                     callbackChatId,
                     `❌ You don't have enough available balance.\n\n` +
                     `💳 المتاح: $${available.toFixed(2)}\n` +
-                    `💵 تكلفة التطوير: $${cost.toFixed(2)}\n\n` +
+                    `💵 Upgrade cost: $${cost.toFixed(2)}\n\n` +
                     `You need $${(
                       cost - available
                     ).toFixed(2)} more.`,
@@ -2043,20 +2043,20 @@ async function startTelegramBot() {
                   {
                     chat_id: callbackChatId,
                     text:
-                      `🔨 تطوير ${formatCountryNameForTelegram(country.name)}\n\n` +
-                      `📈 المستوى الحالي: ${currentLevel}\n` +
+                      `🔨 UPGRADE ${country.name}\n\n` +
+                      `📈 Current Level: ${currentLevel}\n` +
                       `📈 المستوى الجديد: ${nextLevel}\n\n` +
                       `🏗️ المبنى: ${building.name}\n` +
                       `💵 التكلفة: $${cost.toFixed(2)}\n` +
                       `💰 الدخل بالساعة: +$${Number(
                         building.income
-                      ).toFixed(2)}/ساعة\n\n` +
+                      ).toFixed(2)}/hour\n\n` +
                       `هل أنت متأكد أنك تريد التطوير؟`,
                     reply_markup: {
                       inline_keyboard: [
                         [
                           {
-                            text: "✅ تأكيد التطوير",
+                            text: "✅ Confirm Upgrade",
                             callback_data:
                               `confirm_upgrade:${country.id}`,
                           },
@@ -2079,7 +2079,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر تجهيز عملية التطوير."
+                "❌ Unable to prepare upgrade."
               );
             }
 
@@ -2120,13 +2120,13 @@ async function startTelegramBot() {
                 );
 
               console.log(
-                "تم تطوير البلد:",
+                "Country upgraded:",
                 result
               );
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "✅ تم التطوير بنجاح!"
+                "✅ Upgrade successful!"
               );
 
               if (
@@ -2147,7 +2147,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   `🎉 Country upgraded successfully!\n\n` +
-                  `🌍 ${formatCountryNameForTelegram(country?.name)}\n` +
+                  `🌍 ${country?.name ?? "Country"}\n` +
                   `📈 المستوى الجديد: ${Number(
                     country?.upgrade_level ?? 0
                   )}\n` +
@@ -2156,7 +2156,7 @@ async function startTelegramBot() {
                   ).toFixed(2)}\n` +
                   `💰 New Income: $${Number(
                     country?.hourly_income ?? 0
-                  ).toFixed(2)}/ساعة\n\n` +
+                  ).toFixed(2)}/hour\n\n` +
                   `🏗️ Your country has been upgraded successfully.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
@@ -2181,7 +2181,7 @@ async function startTelegramBot() {
                 )
               ) {
                 message =
-                  "❌ رصيدك المتاح لا يكفي لتطوير هذا البلد.";
+                  "❌ You don't have enough available balance for this upgrade.";
               } else if (
                 errorMessage.includes(
                   "COUNTRY_NOT_FOUND"
@@ -2195,7 +2195,7 @@ async function startTelegramBot() {
                 )
               ) {
                 message =
-                  "❌ أنت لا تملك هذا البلد.";
+                  "❌ You don't own this country.";
               } else if (
                 errorMessage.includes(
                   "MAX_LEVEL"
@@ -2207,7 +2207,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ فشل التطوير."
+                "❌ Upgrade failed."
               );
 
               if (
@@ -2229,13 +2229,13 @@ async function startTelegramBot() {
           ) {
             await answerCallbackQuery(
               callbackQuery.id,
-              "تم إلغاء التطوير."
+              "Upgrade cancelled."
             );
 
             if (callbackChatId !== undefined) {
               await sendMessage(
                 callbackChatId,
-                "❌ تم إلغاء التطوير.",
+                "❌ Upgrade cancelled.",
                 await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
@@ -2273,7 +2273,7 @@ async function startTelegramBot() {
             ) {
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ صفحة السوق غير صحيحة."
+                "❌ Invalid market page."
               );
 
               continue;
@@ -2289,7 +2289,7 @@ async function startTelegramBot() {
               );
 
             let marketMessage =
-              `🏪 السوق — الصفحة ${page + 1}/${totalPages}\n\n`;
+              `🏪 MARKET — Page ${page + 1}/${totalPages}\n\n`;
 
             const buttons: unknown[][] = [];
 
@@ -2309,14 +2309,14 @@ async function startTelegramBot() {
                   : "🌍";
 
               marketMessage +=
-                `${formatCountryNameForTelegram(country.name)}\n` +
+                `${code} ${country.name}\n` +
                 `💵 السعر: $${price.toFixed(2)}\n` +
                 `📈 المستوى: ${level}\n` +
-                `💰 الدخل: $${income.toFixed(2)}/ساعة\n\n`;
+                `💰 الدخل: $${income.toFixed(2)}/hour\n\n`;
 
               buttons.push([
                 {
-                  text: `🛒 شراء ${formatCountryNameForTelegram(country.name)}`,
+                  text: `🛒 Buy ${country.name}`,
                   callback_data:
                     `buy_country:${country.id}`,
                 },
@@ -2327,7 +2327,7 @@ async function startTelegramBot() {
 
             if (page > 0) {
               navigationButtons.push({
-                text: "◀️ السابق",
+                text: "◀️ Previous",
                 callback_data:
                   `market_page:${page - 1}`,
               });
@@ -2335,7 +2335,7 @@ async function startTelegramBot() {
 
             if (page < totalPages - 1) {
               navigationButtons.push({
-                text: "التالي ▶️",
+                text: "Next ▶️",
                 callback_data:
                   `market_page:${page + 1}`,
               });
@@ -2401,16 +2401,16 @@ async function startTelegramBot() {
                   {
                     chat_id: callbackChatId,
                     text:
-                      `🛒 ${formatCountryNameForTelegram(country.name)}\n\n` +
+                      `🛒 ${country.name}\n\n` +
                       `💵 السعر: $${Number(country.current_price).toFixed(2)}\n` +
                       `📈 المستوى: ${Number(country.upgrade_level)}\n` +
-                      `💰 الدخل: $${getCountryHourlyIncome(country).toFixed(2)}/ساعة\n\n` +
-                      `هل أنت متأكد أنك تريد شراء ${formatCountryNameForTelegram(country.name)}؟`,
+                      `💰 الدخل: $${getCountryHourlyIncome(country).toFixed(2)}/hour\n\n` +
+                      `هل أنت متأكد أنك تريد شراء ${country.name}?`,
                     reply_markup: {
                       inline_keyboard: [
                         [
                           {
-                            text: "✅ تأكيد الشراء",
+                            text: "✅ Confirm Purchase",
                             callback_data:
                               `confirm_buy:${country.id}`,
                           },
@@ -2433,7 +2433,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر تحميل بيانات البلد"
+                "❌ Unable to load country"
               );
             }
 
@@ -2485,10 +2485,10 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   `🎉 تم شراء البلد بنجاح!\n\n` +
-                  `🌍 ${formatCountryNameForTelegram(countryName)}\n` +
+                  `🌍 ${countryName}\n` +
                   `💵 سعر الشراء: $${price.toFixed(2)}\n` +
                   `📈 المستوى: ${Number(country?.upgrade_level ?? 0)}\n` +
-                  `💰 الدخل بالساعة: $${getCountryHourlyIncome(country ?? {}).toFixed(2)}/ساعة\n\n` +
+                  `💰 الدخل بالساعة: $${getCountryHourlyIncome(country ?? {}).toFixed(2)}/hour\n\n` +
                   `أنت الآن تمتلك هذا البلد وستحصل على دخل بالساعة.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
@@ -2501,7 +2501,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ فشل الشراء."
+                "❌ Purchase failed."
               );
 
               if (
@@ -2510,7 +2510,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   "❌ I couldn't complete this purchase.\n\n" +
-                  "قد يكون البلد مملوكًا بالفعل أو قد لا يكون لديك رصيد متاح كافٍ.",
+                  "The country may already be owned or you may not have enough available balance.",
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2524,7 +2524,7 @@ async function startTelegramBot() {
           ) {
             await answerCallbackQuery(
               callbackQuery.id,
-              "تم إلغاء الشراء."
+              "Purchase cancelled."
             );
 
             if (
@@ -2532,7 +2532,7 @@ async function startTelegramBot() {
             ) {
               await sendMessage(
                 callbackChatId,
-                "❌ تم إلغاء الشراء.",
+                "❌ Purchase cancelled.",
                 await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
@@ -2585,7 +2585,7 @@ async function startTelegramBot() {
               if (country.owner_id !== player.id) {
                 await answerCallbackQuery(
                   callbackQuery.id,
-                  "❌ أنت لا تملك هذا البلد."
+                  "❌ You don't own this country."
                 );
 
                 continue;
@@ -2603,21 +2603,21 @@ async function startTelegramBot() {
                   {
                     chat_id: callbackChatId,
                     text:
-                      `🏷️ بيع ${formatCountryNameForTelegram(country.name)}\n\n` +
-                      `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
+                      `🏷️ بيع ${country.name}\n\n` +
+                      `🌍 ${country.name}\n` +
                       `💵 القيمة الحالية: $${Number(
                         country.current_price
                       ).toFixed(2)}\n` +
                       `📈 المستوى: ${Number(
                         country.upgrade_level
                       )}\n` +
-                      `💰 الدخل: $${getCountryHourlyIncome(country).toFixed(2)}/ساعة\n\n` +
+                      `💰 الدخل: $${getCountryHourlyIncome(country).toFixed(2)}/hour\n\n` +
                       `هل أنت متأكد أنك تريد بيع هذا البلد؟`,
                     reply_markup: {
                       inline_keyboard: [
                         [
                           {
-                            text: "✅ تأكيد البيع",
+                            text: "✅ Confirm Sale",
                             callback_data:
                               `confirm_sell:${country.id}`,
                           },
@@ -2640,7 +2640,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر تحميل بيانات البلد."
+                "❌ Unable to load country."
               );
             }
 
@@ -2681,7 +2681,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "✅ تم بيع البلد!"
+                "✅ Country sold!"
               );
 
               if (
@@ -2706,10 +2706,10 @@ async function startTelegramBot() {
 
                 await sendMessage(
                   callbackChatId,
-                  `💰 تم بيع البلد بنجاح!\n\n` +
-                  `🌍 ${formatCountryNameForTelegram(countryName)}\n` +
-                  `💵 قيمة البيع: $${salePrice.toFixed(2)}\n\n` +
-                  `البلد متاح الآن في السوق.`,
+                  `💰 Country sold successfully!\n\n` +
+                  `🌍 ${countryName}\n` +
+                  `💵 Sale value: $${salePrice.toFixed(2)}\n\n` +
+                  `The country is now available in the market.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2721,7 +2721,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ فشل البيع."
+                "❌ Sale failed."
               );
 
               if (
@@ -2730,7 +2730,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   "❌ I couldn't sell this country.\n\n" +
-                  "قد لا يكون البلد مملوكًا لك بعد الآن.",
+                  "The country may no longer be owned by you.",
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2743,7 +2743,7 @@ async function startTelegramBot() {
           ) {
             await answerCallbackQuery(
               callbackQuery.id,
-              "تم إلغاء البيع."
+              "Sale cancelled."
             );
 
             if (
@@ -2751,7 +2751,7 @@ async function startTelegramBot() {
             ) {
               await sendMessage(
                 callbackChatId,
-                "❌ تم إلغاء البيع.",
+                "❌ Sale cancelled.",
                 await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
@@ -2783,7 +2783,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "✅ تم قبول العرض!"
+                "✅ Offer accepted!"
               );
 
               if (
@@ -2822,9 +2822,9 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   `✅ تم قبول العرض بنجاح!\n\n` +
-                  `🌍 البلد: ${formatCountryNameForTelegram(countryName)}\n` +
-                  `💰 سعر الشراء: $${price.toFixed(2)}\n\n` +
-                  `تم نقل ملكية البلد إلى المشتري.`,
+                  `🌍 Country: ${countryName}\n` +
+                  `💰 Purchase price: $${price.toFixed(2)}\n\n` +
+                  `The country has been transferred to the buyer.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2852,18 +2852,18 @@ async function startTelegramBot() {
                 case "OFFER_NOT_ACTIVE":
                   errorMessage =
                     "❌ This offer is no longer active.\n\n" +
-                    "قد يكون العرض قد تم قبوله أو رفضه أو إلغاؤه أو انتهت صلاحيته بالفعل.";
+                    "It may have already been accepted, rejected, cancelled, or expired.";
                   break;
 
                 case "NOT_COUNTRY_OWNER":
                   errorMessage =
-                    "❌ لم تعد مالك هذا البلد.";
+                    "❌ You are no longer the owner of this country.";
                   break;
 
                 case "LEVEL_0_COUNTRY_NOT_FOR_SALE":
                   errorMessage =
                     "❌ This country cannot be traded yet.\n\n" +
-                    "يجب تطوير البلد قبل بيعه أو قبول عرض عليه.";
+                    "The country must be upgraded before it can be sold or accepted through an offer.";
                   break;
 
                 case "PLAYER_NOT_FOUND":
@@ -2874,7 +2874,7 @@ async function startTelegramBot() {
 
                 case "INSUFFICIENT_FUNDS":
                   errorMessage =
-                    "❌ لم يعد لدى المشتري رصيد محجوز كافٍ لهذا العرض.";
+                    "❌ The buyer no longer has enough reserved money for this offer.";
                   break;
 
                 default:
@@ -2886,7 +2886,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر قبول العرض."
+                "❌ Offer could not be accepted."
               );
 
               if (
@@ -2927,7 +2927,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تم رفض العرض."
+                "❌ Offer rejected."
               );
 
               if (
@@ -2935,8 +2935,8 @@ async function startTelegramBot() {
               ) {
                 await sendMessage(
                   callbackChatId,
-                  "❌ تم رفض العرض بنجاح.\n\n" +
-                  "💳 تم تحرير الرصيد المحجوز للمشتري.",
+                  "❌ Offer rejected successfully.\n\n" +
+                  "💳 The buyer's reserved money has been released.",
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2948,7 +2948,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر رفض العرض."
+                "❌ Could not reject offer."
               );
 
               if (
@@ -2957,7 +2957,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   "❌ I couldn't reject this offer.\n\n" +
-                  "قد يكون العرض قد انتهت صلاحيته أو تم قبوله أو رفضه أو إلغاؤه بالفعل.",
+                  "The offer may have expired, already been accepted, rejected, or cancelled.",
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -2998,7 +2998,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "✅ تم إلغاء العرض."
+                "✅ Offer cancelled."
               );
 
               if (
@@ -3006,8 +3006,8 @@ async function startTelegramBot() {
               ) {
                 await sendMessage(
                   callbackChatId,
-                  "❌ تم إلغاء العرض بنجاح.\n\n" +
-                  "تم تحرير الرصيد المحجوز.",
+                  "❌ Offer cancelled successfully.\n\n" +
+                  "The reserved money has been released.",
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -3019,7 +3019,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر إلغاء العرض."
+                "❌ Could not cancel offer."
               );
 
               if (
@@ -3028,7 +3028,7 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   "❌ I couldn't cancel this offer.\n\n" +
-                  "قد يكون العرض قد تم قبوله أو إلغاؤه أو انتهت صلاحيته بالفعل.",
+                  "It may have already been accepted, cancelled, or expired.",
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -3077,7 +3077,7 @@ async function startTelegramBot() {
               ) {
                 await sendMessage(
                   callbackChatId,
-                  `💰 تقديم عرض على ${formatCountryNameForTelegram(country.name)}\n\n` +
+                  `💰 Make an offer for ${country.name}\n\n` +
                   `Current value: $${Number(
                     country.current_price
                   ).toFixed(2)}\n\n` +
@@ -3093,7 +3093,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر إنشاء العرض"
+                "❌ Unable to create offer"
               );
             }
 
@@ -3124,7 +3124,7 @@ async function startTelegramBot() {
             ) {
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ الصفحة غير صحيحة."
+                "❌ Invalid page."
               );
 
               continue;
@@ -3153,7 +3153,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ تعذر تحميل الصفحة."
+                "❌ Unable to load page."
               );
             }
 
@@ -3188,7 +3188,7 @@ async function startTelegramBot() {
             if (!countryId || price === undefined) {
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ انتهت جلسة العرض."
+                "❌ Offer session expired."
               );
 
               continue;
@@ -3212,7 +3212,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "✅ تم إرسال العرض!"
+                "✅ Offer sent!"
               );
 
               if (
@@ -3231,10 +3231,12 @@ async function startTelegramBot() {
                 await sendMessage(
                   callbackChatId,
                   `📩 Offer sent successfully!\n\n` +
+                  `🌍 ${result?.country ?? "Country"}\n` +
                   `💰 العرض: $${Number(
                     result?.price ?? price
                   ).toFixed(2)}\n\n` +
-                  `💳 تم تجميد المبلغ.\n` +
+                  `💳 The amount has been reserved.\n` +
+                  `⏰ Expires: ${expiresAt}`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
@@ -3254,7 +3256,7 @@ async function startTelegramBot() {
 
               await answerCallbackQuery(
                 callbackQuery.id,
-                "❌ فشل إنشاء العرض."
+                "❌ Offer failed."
               );
 
               if (
@@ -3285,7 +3287,7 @@ async function startTelegramBot() {
 
             await answerCallbackQuery(
               callbackQuery.id,
-              "تم إلغاء العرض."
+              "Offer cancelled."
             );
 
             if (
@@ -3293,7 +3295,7 @@ async function startTelegramBot() {
             ) {
               await sendMessage(
                 callbackChatId,
-                "❌ تم إلغاء إنشاء العرض.",
+                "❌ Offer creation cancelled.",
                 await mainMenuForTelegramUser(callbackTelegramUserId)
               );
             }
@@ -3316,7 +3318,7 @@ async function startTelegramBot() {
           ) {
             return (
               "❌ Your offer is below the allowed minimum price.\n\n" +
-              "يرجى إدخال عرض ضمن نطاق السعر المسموح به."
+              "Please enter an offer within the allowed price range."
             );
           }
 
@@ -3327,7 +3329,7 @@ async function startTelegramBot() {
           ) {
             return (
               "❌ Your offer is above the allowed maximum price.\n\n" +
-              "يرجى إدخال عرض ضمن نطاق السعر المسموح به."
+              "Please enter an offer within the allowed price range."
             );
           }
 
@@ -3337,7 +3339,7 @@ async function startTelegramBot() {
             )
           ) {
             return (
-              "❌ ليس لديك رصيد متاح كافٍ."
+              "❌ You don't have enough available balance."
             );
           }
 
@@ -3347,7 +3349,7 @@ async function startTelegramBot() {
             )
           ) {
             return (
-              "❌ لا يمكنك تقديم عرض على بلد تملكه."
+              "❌ You cannot make an offer on your own country."
             );
           }
 
@@ -3362,8 +3364,8 @@ async function startTelegramBot() {
           }
 
           return (
-            "❌ حدث خطأ أثناء إنشاء العرض.\n\n" +
-            "حاول مرة أخرى."
+            "❌ Something went wrong while creating the offer.\n\n" +
+            "Please try again."
           );
         }
 
@@ -3394,12 +3396,12 @@ async function startTelegramBot() {
         if (
           (pendingAdminBalanceAdjustments.has(telegramUserId) ||
             pendingAdminSettingsInputs.has(telegramUserId)) &&
-          (text === "/cancel" || text === "❌ إلغاء")
+          (text === "/cancel" || text === "❌ Cancel")
         ) {
           clearPendingAdminState(telegramUserId);
           await sendMessage(
             chatId,
-            "❌ تم إلغاء إجراء الإدارة.",
+            "❌ Admin action cancelled.",
             await mainMenuForTelegramUser(telegramUserId)
           );
           continue;
@@ -3444,7 +3446,7 @@ async function startTelegramBot() {
           if (existingUser) {
             await sendMessage(
               chatId,
-              `🎮 أهلًا بعودتك، ${existingUser.name}!`,
+              `🎮 Welcome back, ${existingUser.name}!`,
               await mainMenuForTelegramUser(telegramUserId)
             );
 
@@ -3474,9 +3476,9 @@ async function startTelegramBot() {
 
           await sendMessage(
             chatId,
-            "🎮 أهلًا بيك في مهمة مستحيلة!\n\n" +
+            "🎮 Welcome to Mission Impossible!\n\n" +
             "Let's create your game account.\n\n" +
-            "ابعت رقم تليفونك.\n\n" +
+            "Please send your phone number.\n\n" +
             "Example:\n" +
             "201000000001"
           );
@@ -3506,8 +3508,8 @@ async function startTelegramBot() {
           ) {
             await sendMessage(
               chatId,
-              "❌ رقم التليفون غير صحيح.\n\n" +
-              "ابعت رقم تليفون صحيح."
+              "❌ Invalid phone number.\n\n" +
+              "Please send a valid phone number."
             );
 
             continue;
@@ -3552,7 +3554,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               `🎉 Welcome, ${existingUser.name}! 🎮\n\n` +
-              "تم ربط حساب تيليجرام الخاص بك بنجاح.",
+              "Your Telegram account has been linked successfully.",
               await mainMenuForTelegramUser(telegramUserId)
             );
 
@@ -3589,7 +3591,7 @@ async function startTelegramBot() {
           await sendMessage(
             chatId,
             "🎉 Great! We couldn't find an existing game account, so let's create one.\n\n" +
-            "اكتب اسم اللاعب الخاص بك.\n\n" +
+            "Please enter your player name.\n\n" +
             "This is the name that will appear in the game and leaderboard."
           );
 
@@ -3618,7 +3620,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "⚠️ Your registration session expired.\n\n" +
-              "يرجى إرسال /start للتسجيل مرة أخرى."
+              "Please send /start to register again."
             );
 
             continue;
@@ -3633,7 +3635,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Invalid name.\n\n" +
-              "يرجى إدخال اسم من 2 إلى 50 حرفًا."
+              "Please enter a name between 2 and 50 characters."
             );
 
             continue;
@@ -3658,12 +3660,12 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              `🎉 تم إنشاء الحساب بنجاح!\n\n` +
+              `🎉 Account created successfully!\n\n` +
               `Welcome, ${newUser.name}! 🎮\n\n` +
               `💰 Starting balance: $${Number(
                 newUser.balance
               ).toFixed(2)}\n\n` +
-              "حساب تيليجرام الخاص بك مرتبط الآن بحساب اللعبة.",
+              "Your Telegram account is now linked to your game account.",
               await mainMenuForTelegramUser(telegramUserId)
             );
 
@@ -3677,7 +3679,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ I couldn't create your account.\n\n" +
-              "حاول مرة أخرى."
+              "Please try again."
             );
 
             continue;
@@ -3703,7 +3705,7 @@ async function startTelegramBot() {
             await sendMessage(
               chatId,
               "❌ Invalid offer amount.\n\n" +
-              "اكتب رقمًا موجبًا.\n\n" +
+              "Please enter a positive number.\n\n" +
               "Example: 25000"
             );
 
@@ -3778,12 +3780,12 @@ async function startTelegramBot() {
               await sendMessage(
                 chatId,
                 `❌ العرض منخفض جدًا\n\n` +
-                `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
+                `🌍 ${country.name}\n` +
                 `💵 القيمة الحالية: $${currentPrice.toFixed(2)}\n\n` +
                 `عرضك: $${price.toFixed(2)}\n\n` +
                 `📉 الحد الأدنى المسموح: $${minimumPrice.toFixed(2)}\n` +
                 `📈 الحد الأقصى المسموح: $${maximumPrice.toFixed(2)}\n\n` +
-                `أدخل مبلغًا داخل هذا النطاق.`
+                `Please enter an amount within this range.`
               );
 
               continue;
@@ -3793,12 +3795,12 @@ async function startTelegramBot() {
               await sendMessage(
                 chatId,
                 `❌ العرض مرتفع جدًا\n\n` +
-                `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
+                `🌍 ${country.name}\n` +
                 `💵 القيمة الحالية: $${currentPrice.toFixed(2)}\n\n` +
                 `عرضك: $${price.toFixed(2)}\n\n` +
                 `📉 الحد الأدنى المسموح: $${minimumPrice.toFixed(2)}\n` +
                 `📈 الحد الأقصى المسموح: $${maximumPrice.toFixed(2)}\n\n` +
-                `أدخل مبلغًا داخل هذا النطاق.`
+                `Please enter an amount within this range.`
               );
 
               continue;
@@ -3811,7 +3813,7 @@ async function startTelegramBot() {
             if (available < price) {
               await sendMessage(
                 chatId,
-                `❌ الرصيد المتاح غير كافٍ.\n\n` +
+                `❌ Insufficient available balance.\n\n` +
                 `Your available balance: $${available.toFixed(2)}\n` +
                 `عرضك: $${price.toFixed(2)}`
               );
@@ -3829,7 +3831,7 @@ async function startTelegramBot() {
                 chat_id: chatId,
                 text:
                   `📩 معاينة العرض\n\n` +
-                  `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
+                  `🌍 ${country.name}\n` +
                   `💵 القيمة الحالية: $${Number(
                     country.current_price
                   ).toFixed(2)}\n` +
@@ -3839,7 +3841,7 @@ async function startTelegramBot() {
                   inline_keyboard: [
                     [
                       {
-                        text: "✅ تأكيد العرض",
+                        text: "✅ Confirm Offer",
                         callback_data:
                           "confirm_offer",
                       },
@@ -3877,8 +3879,8 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              "❌ تعذر تجهيز هذا العرض.\n\n" +
-              "حاول مرة أخرى."
+              "❌ I couldn't prepare this offer.\n\n" +
+              "Please try again."
             );
 
             continue;
@@ -3895,7 +3897,7 @@ async function startTelegramBot() {
             if (!Number.isFinite(amount) || amount === 0) {
               await sendMessage(
                 chatId,
-                "❌ المبلغ غير صحيح. يرجى إدخال رقم، مثل 250 أو -250.",
+                "❌ Invalid amount. Please enter a numeric value, for example 250 or -250.",
                 await mainMenuForTelegramUser(telegramUserId)
               );
               continue;
@@ -3910,7 +3912,7 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              `💰 تعديل الرصيد\n\nاللاعب: ${nextPending.playerName}\nالمبلغ: $${amount.toFixed(2)}\n\nاكتب سبب تعديل الرصيد:\nأرسل /cancel للإلغاء.`,
+              `💰 Adjust Balance\n\nPlayer: ${nextPending.playerName}\nAmount: $${amount.toFixed(2)}\n\nEnter a reason for this adjustment:\nSend /cancel to cancel.`,
               await mainMenuForTelegramUser(telegramUserId)
             );
             continue;
@@ -3922,7 +3924,7 @@ async function startTelegramBot() {
             if (!reason) {
               await sendMessage(
                 chatId,
-                "❌ يرجى إدخال سبب لتعديل الرصيد.",
+                "❌ Please provide a reason for the adjustment.",
                 await mainMenuForTelegramUser(telegramUserId)
               );
               continue;
@@ -3935,7 +3937,7 @@ async function startTelegramBot() {
               pendingAdminBalanceAdjustments.delete(telegramUserId);
               await sendMessage(
                 chatId,
-                `❌ فشل تعديل الرصيد.\n\nالرصيد الناتج سيكون بالسالب: $${resultingBalance.toFixed(2)}.`,
+                `❌ Balance adjustment failed.\n\nThe resulting balance would be negative: $${resultingBalance.toFixed(2)}.`,
                 await mainMenuForTelegramUser(telegramUserId)
               );
               continue;
@@ -3951,8 +3953,8 @@ async function startTelegramBot() {
               chat_id: chatId,
               text:
                 `💰 Confirm Balance Adjustment\n\n` +
-                `اللاعب: ${pending.playerName}\n` +
-                `المبلغ: $${amount.toFixed(2)}\n` +
+                `Player: ${pending.playerName}\n` +
+                `Amount: $${amount.toFixed(2)}\n` +
                 `Current balance: $${pending.currentBalance.toFixed(2)}\n` +
                 `Resulting balance: $${resultingBalance.toFixed(2)}\n` +
                 `Reason: ${reason}\n\n` +
@@ -4013,7 +4015,7 @@ async function startTelegramBot() {
 
               if (level >= 5) {
                 message +=
-                  `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
+                  `🌍 ${country.name}\n` +
                   `📈 المستوى: ${level} — أقصى مستوى\n\n`;
 
                 continue;
@@ -4027,7 +4029,7 @@ async function startTelegramBot() {
 
               if (!building) {
                 message +=
-                  `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
+                  `🌍 ${country.name}\n` +
                   `📈 المستوى: ${level}\n` +
                   `⚠️ إعدادات التطوير غير متاحة.\n\n`;
 
@@ -4035,19 +4037,19 @@ async function startTelegramBot() {
               }
 
               message +=
-                `🌍 ${formatCountryNameForTelegram(country.name)}\n` +
-                `📈 المستوى الحالي: ${level}\n` +
-                `🏗️ التالي: ${building.name}\n` +
+                `🌍 ${country.name}\n` +
+                `📈 Current Level: ${level}\n` +
+                `🏗️ Next: ${building.name}\n` +
                 `💵 التكلفة: $${Number(
                   building.cost
                 ).toFixed(2)}\n` +
                 `💰 الدخل بالساعة: +$${Number(
                   building.income
-                ).toFixed(2)}/ساعة\n\n`;
+                ).toFixed(2)}/hour\n\n`;
 
               buttons.push([
                 {
-                  text: `🔨 تطوير ${formatCountryNameForTelegram(country.name)}`,
+                  text: `🔨 Upgrade ${country.name}`,
                   callback_data:
                     `upgrade_country:${country.id}`,
                 },
@@ -4072,7 +4074,7 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              "❌ تعذر تحميل خيارات التطوير حاليًا.",
+              "❌ Unable to load upgrade options right now.",
               await mainMenuForTelegramUser(telegramUserId)
             );
           }
@@ -4141,7 +4143,7 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              "❌ I couldn't load your balance right now.\n\nحاول مرة أخرى.",
+              "❌ I couldn't load your balance right now.\n\nPlease try again.",
               await mainMenuForTelegramUser(telegramUserId)
             );
           }
@@ -4180,7 +4182,7 @@ async function startTelegramBot() {
           }
 
           let message =
-            "🌍 بلادي\n\n";
+            "🌍 MY COUNTRIES\n\n";
 
           let totalHourlyIncome = 0;
           let totalValue = 0;
@@ -4206,18 +4208,23 @@ async function startTelegramBot() {
                 : "🌍";
 
             message +=
-              `${formatCountryNameForTelegram(country.name, country.code)}\n` +
+              `${flag} ${country.name}\n` +
               `💵 القيمة: $${price.toFixed(2)}\n` +
               `📈 المستوى: ${level}\n` +
-              `💰 الدخل: $${income.toFixed(2)}/ساعة\n\n`;
+              `💰 الدخل: $${income.toFixed(2)}/hour\n\n`;
 
             if (level > 0) {
               buttons.push([
                 {
-                  text: `💰 بيع ${formatCountryNameForTelegram(country.name, country.code)}`,
+                  text: `💰 Sell ${country.name}`,
                   callback_data:
                     `sell_country:${country.id}`,
-                }
+                },
+                {
+                  text: `📩 Offers ${country.name}`,
+                  callback_data:
+                    `country_offers:${country.id}`,
+                },
               ]);
             }
           }
@@ -4225,7 +4232,7 @@ async function startTelegramBot() {
           message +=
             "━━━━━━━━━━━━━━\n" +
             `🌍 البلاد: ${countries.length}\n` +
-            `💵 القيمة الإجمالية: $${totalValue.toFixed(2)}\n` +
+            `💵 Total value: $${totalValue.toFixed(2)}\n` +
             `💰 الدخل بالساعة: $${totalHourlyIncome.toFixed(2)}`;
 
           await telegramRequest(
@@ -4262,7 +4269,7 @@ async function startTelegramBot() {
             }
 
             let message =
-              "🏆 المتصدرون\n\n";
+              "🏆 LEADERBOARD\n\n";
 
             for (
               let i = 0;
@@ -4279,7 +4286,7 @@ async function startTelegramBot() {
 
               const name =
                 player.name ??
-                "لاعب غير معروف";
+                "Unknown Player";
 
               const netWorth =
                 Number(
@@ -4300,7 +4307,7 @@ async function startTelegramBot() {
 
               message +=
                 `${medal}${rank}. ${name}\n` +
-                `💰 صافي الثروة: $${netWorth.toFixed(2)}\n\n`;
+                `💰 Net Worth: $${netWorth.toFixed(2)}\n\n`;
             }
 
             await sendMessage(
@@ -4316,7 +4323,7 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              "❌ تعذر تحميل المتصدرين حاليًا.",
+              "❌ Unable to load the leaderboard right now.",
               await mainMenuForTelegramUser(telegramUserId)
             );
           }
@@ -4332,7 +4339,7 @@ async function startTelegramBot() {
           if (!isAdmin) {
             await sendMessage(
               chatId,
-              "❌ غير مسموح لك بالدخول إلى لوحة الإدارة.",
+              "❌ You are not authorized to access the admin panel.",
               await mainMenuForTelegramUser(telegramUserId)
             );
             continue;
@@ -4368,7 +4375,7 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              "❌ تعذر تحميل السوق حاليًا.",
+              "❌ Unable to load the market right now.",
               await mainMenuForTelegramUser(telegramUserId)
             );
           }
@@ -4399,7 +4406,7 @@ async function startTelegramBot() {
             } = result;
 
             let message =
-              "📩 عروضي\n\n";
+              "📩 MY OFFERS\n\n";
 
             const buttons: unknown[][] = [];
 
@@ -4410,13 +4417,13 @@ async function startTelegramBot() {
              */
 
             message +=
-              "📥 العروض المستلمة\n\n";
+              "📥 OFFERS RECEIVED\n\n";
 
             if (
               receivedOffers.length === 0
             ) {
               message +=
-                "لا توجد عروض على بلادك.\n\n";
+                "You have no offers on your countries.\n\n";
             } else {
               for (
                 const offer of receivedOffers
@@ -4494,7 +4501,7 @@ async function startTelegramBot() {
                     );
 
                   message +=
-                    `⏰ ينتهي: ${expiresAt}\n`;
+                    `⏰ Expires: ${expiresAt}\n`;
                 }
 
                 message += "\n";
@@ -4505,7 +4512,7 @@ async function startTelegramBot() {
                   buttons.push([
                     {
                       text:
-                        `✅ قبول — ${formatCountryNameForTelegram(countryName)}`,
+                        `✅ Accept — ${countryName}`,
                       callback_data:
                         `accept_offer:${offer.id}`,
                     },
@@ -4530,13 +4537,13 @@ async function startTelegramBot() {
              */
 
             message +=
-              "📤 العروض التي قدمتها\n\n";
+              "📤 OFFERS I MADE\n\n";
 
             if (
               sentOffers.length === 0
             ) {
               message +=
-                "لم تقدم أي عروض حتى الآن.\n\n";
+                "You haven't made any offers yet.\n\n";
             } else {
               for (
                 const offer of sentOffers
@@ -4615,7 +4622,7 @@ async function startTelegramBot() {
                     );
 
                   message +=
-                    `⏰ ينتهي: ${expiresAt}\n`;
+                    `⏰ Expires: ${expiresAt}\n`;
                 }
 
                 message += "\n";
@@ -4626,7 +4633,7 @@ async function startTelegramBot() {
                   buttons.push([
                     {
                       text:
-                        `❌ إلغاء — ${formatCountryNameForTelegram(countryName)}`,
+                        `❌ Cancel — ${countryName}`,
                       callback_data:
                         `cancel_offer:${offer.id}`,
                     },
@@ -4638,13 +4645,13 @@ async function startTelegramBot() {
             if (
               buttons.length === 0
             ) {
-              // buttons.push([
-              //   {
-              //     text: "🔄 Refresh",
-              //     callback_data:
-              //       "refresh_my_offers",
-              //   },
-              // ]);
+              buttons.push([
+                {
+                  text: "🔄 Refresh",
+                  callback_data:
+                    "refresh_my_offers",
+                },
+              ]);
             }
 
             await telegramRequest(
@@ -4666,7 +4673,7 @@ async function startTelegramBot() {
 
             await sendMessage(
               chatId,
-              "❌ تعذر تحميل عروضك حاليًا.",
+              "❌ Unable to load your offers right now.",
               await mainMenuForTelegramUser(telegramUserId)
             );
           }
