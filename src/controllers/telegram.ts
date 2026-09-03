@@ -705,10 +705,11 @@ async function sendMarketPage(
 
       const level = Number(country.upgrade_level);
 
-      const code = country.code ? `🌐 ${country.code}` : "🌍";
+      const cat = country.category ? `🌐 ${country.category}` : "🌍";
 
       marketMessage +=
-        `${formatCountryNameForTelegram(country.name)}\n` +
+        `${formatCountryNameForTelegram(country.name, country.code)}\n` +
+        `التصنيف : ${cat}\n`+
         `💵 السعر: $${price.toFixed(2)}\n` +
         `📈 المستوى: ${level}\n` +
         `💰 الدخل: $${income.toFixed(2)}/ساعة\n\n`;
@@ -716,7 +717,7 @@ async function sendMarketPage(
       buttons.push([
         {
           text:
-            `🛒 شراء ${formatCountryNameForTelegram(country.name)}`,
+            `🛒 شراء ${formatCountryNameForTelegram(country.name, country.code)}\n `,
           callback_data:
             `buy_country:${country.id}`,
         },
@@ -1847,7 +1848,7 @@ async function startTelegramBot() {
                         `السعر الحالي: $${Number(c.current_price ?? 0).toFixed(2)}\n` +
                         `الدخل بالساعة: $${Number(c.hourly_income ?? 0).toFixed(2)}/ساعة\n` +
                         `مستوى التطوير: ${Number(c.upgrade_level ?? 0)}\n` +
-                        `الفئة: ${c.category ?? "N/A"}\n` +
+                        `التصنيف: ${c.category ?? "N/A"}\n` +
                         `Market: ${c.market_enabled === false ? "🔴 متوقف" : "🟢 متاح"}\n\n`;
                       keyboard.push([
                         {
@@ -2303,14 +2304,20 @@ async function startTelegramBot() {
               const level =
                 Number(country.upgrade_level);
 
-              const code =
-                country.code
-                  ? `🌐 ${country.code}`
+              const cat =
+                country.category
+                  ? `🌐 ${country.category}`
                   : "🌍";
 
+              // const code =
+              //   country.code
+              //     ? `🌐 ${country.code}`
+              //     : "🌍";
+
               marketMessage +=
-                `${formatCountryNameForTelegram(country.name)}\n` +
+                `${formatCountryNameForTelegram(country.name , country.code )}\n` +
                 `💵 السعر: $${price.toFixed(2)}\n` +
+                `التصنيف : ${cat}\n`+
                 `📈 المستوى: ${level}\n` +
                 `💰 الدخل: $${income.toFixed(2)}/ساعة\n\n`;
 
@@ -2402,6 +2409,7 @@ async function startTelegramBot() {
                     chat_id: callbackChatId,
                     text:
                       `🛒 ${formatCountryNameForTelegram(country.name)}\n\n` +
+                      `التصنيف : ${country.category}\n`+
                       `💵 السعر: $${Number(country.current_price).toFixed(2)}\n` +
                       `📈 المستوى: ${Number(country.upgrade_level)}\n` +
                       `💰 الدخل: $${getCountryHourlyIncome(country).toFixed(2)}/ساعة\n\n` +
