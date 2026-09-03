@@ -2147,18 +2147,18 @@ async function startTelegramBot() {
 
                 await sendMessage(
                   callbackChatId,
-                  `🎉 Country upgraded successfully!\n\n` +
+                  `🎉 تم تطوير البلد بنجاح\n\n` +
                   `🌍 ${formatCountryNameForTelegram(country?.name)}\n` +
                   `📈 المستوى الجديد: ${Number(
                     country?.upgrade_level ?? 0
                   )}\n` +
-                  `💵 New Value: $${Number(
+                  `💵 القيمة الجديدة: $${Number(
                     country?.current_price ?? 0
                   ).toFixed(2)}\n` +
-                  `💰 New Income: $${Number(
+                  `💰 الدخل الجديد: $${Number(
                     country?.hourly_income ?? 0
                   ).toFixed(2)}/ساعة\n\n` +
-                  `🏗️ Your country has been upgraded successfully.`,
+                  `🏗️ تم تطوير بلدك.`,
                   await mainMenuForTelegramUser(callbackTelegramUserId)
                 );
               }
