@@ -4422,7 +4422,7 @@ async function startTelegramBot() {
                 );
 
               const name =
-                player.name ??
+                player.player_name ??
                 "لاعب غير معروف";
 
               const netWorth =
